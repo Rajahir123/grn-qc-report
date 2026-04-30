@@ -222,7 +222,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({
           query: `
             mutation {
-              create_item (board_id: ${selectedBoardId}, item_name: ${JSON.stringify(itemName)}) {
+              create_item (board_id: "${selectedBoardId}", item_name: ${JSON.stringify(itemName)}) {
                 id
               }
             }
@@ -232,7 +232,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       
       if (!creationResponse.ok) {
         const errorText = await creationResponse.text();
-        throw new Error(`Creation failed (${creationResponse.status}): ${errorText.substring(0, 100)}`);
+        throw new Error(`Creation failed (${creationResponse.status}): ${errorText.substring(0, 150)}`);
       }
 
       const creationData = await creationResponse.json();
@@ -266,7 +266,7 @@ ${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notRecei
         body: JSON.stringify({
           query: `
             mutation {
-              create_update (item_id: ${mainItemId}, body: ${JSON.stringify(tableMarkdown)}) {
+              create_update (item_id: "${mainItemId}", body: ${JSON.stringify(tableMarkdown)}) {
                 id
               }
             }
@@ -276,7 +276,7 @@ ${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notRecei
 
       if (!updateResponse.ok) {
         const errorText = await updateResponse.text();
-        throw new Error(`Update failed (${updateResponse.status}): ${errorText.substring(0, 100)}`);
+        throw new Error(`Update failed (${updateResponse.status}): ${errorText.substring(0, 150)}`);
       }
 
       const updateData = await updateResponse.json();
