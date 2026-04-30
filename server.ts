@@ -10,20 +10,20 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
 
   // API Routes
   app.post("/api/monday/proxy", async (req, res) => {
+    console.log(`[Proxy] Incoming request for Monday API`);
     const headerToken = req.headers['x-monday-token'];
     const envToken = process.env.MONDAY_API_TOKEN;
     
-    // Prioritize the token from the UI
     let token = (typeof headerToken === 'string' ? headerToken : 
                   (Array.isArray(headerToken) ? headerToken[0] : 
                   (envToken && !envToken.includes('YOUR_') ? envToken : null)));
     
     if (!token || token === 'null' || token === 'undefined') {
-      return res.status(401).json({ error: "Missing Monday API Token. Please provide it in the UI." });
+      return res.status(401).json({ error: "Missing Monday API Token" });
     }
 
     token = token.trim();
@@ -38,14 +38,26 @@ async function startServer() {
       });
       res.json(response.data);
     } catch (error: any) {
+      const status = error.response?.status || 500;
       const errorData = error.response?.data;
-      console.error("Monday API Proxy Error:", {
-        status: error.response?.status,
-        data: errorData,
+      
+      console.error(`[Proxy] Monday API Error (${status}):`, {
+        data: typeof errorData === 'string' ? errorData.substring(0, 100) : errorData,
         message: error.message
       });
-      res.status(error.response?.status || 500).json(errorData || { error: "Failed to connect to Monday.com" });
+
+      // Always return JSON even if Monday returns HTML
+      if (typeof errorData === 'string' && errorData.includes('<!DOCTYPE html>')) {
+        return res.status(status).json({ error: "Monday API returned an HTML error page", details: errorData.substring(0, 200) });
+      }
+
+      res.status(status).json(errorData || { error: "Failed to connect to Monday.com" });
     }
+  });
+
+  // Explicitly handle 404 for API routes to avoid falling through to SPA HTML
+  app.all("/api/*", (req, res) => {
+    res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
   });
 
   // Vite middleware for development

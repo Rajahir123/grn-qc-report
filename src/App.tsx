@@ -230,6 +230,11 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
       
+      if (!creationResponse.ok) {
+        const errorText = await creationResponse.text();
+        throw new Error(`Creation failed (${creationResponse.status}): ${errorText.substring(0, 100)}`);
+      }
+
       const creationData = await creationResponse.json();
       
       if (creationData.errors) {
@@ -268,6 +273,11 @@ ${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notRecei
           `
         })
       });
+
+      if (!updateResponse.ok) {
+        const errorText = await updateResponse.text();
+        throw new Error(`Update failed (${updateResponse.status}): ${errorText.substring(0, 100)}`);
+      }
 
       const updateData = await updateResponse.json();
       if (updateData.errors) {
