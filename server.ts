@@ -14,7 +14,6 @@ async function startServer() {
 
   // API Routes
   app.post("/api/monday/proxy", async (req, res) => {
-    console.log(`[Proxy] Incoming POST request for Monday API`);
     const headerToken = req.headers['x-monday-token'];
     const envToken = process.env.MONDAY_API_TOKEN;
     
@@ -23,38 +22,31 @@ async function startServer() {
                   (envToken && !envToken.includes('YOUR_') ? envToken : null)));
     
     if (!token || token === 'null' || token === 'undefined') {
-      console.warn(`[Proxy] Request rejected: Missing token`);
       return res.status(401).json({ error: "Missing Monday API Token" });
     }
 
     token = token.trim();
+    const maskedToken = `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
+    console.log(`[Proxy] POST to Monday API with token ${maskedToken}`);
 
     try {
-      console.log(`[Proxy] Forwarding to Monday API...`);
       const response = await axios.post("https://api.monday.com/v2", req.body, {
         headers: {
           "Content-Type": "application/json",
           "Authorization": token,
           "API-Version": "2024-04"
-        },
-        timeout: 10000 // 10s timeout
+        }
       });
-      console.log(`[Proxy] Monday API Success (Status: ${response.status})`);
       res.json(response.data);
     } catch (error: any) {
       const status = error.response?.status || 500;
       const errorData = error.response?.data;
       
-      console.error(`[Proxy] Monday API Error (${status}):`, {
-        data: typeof errorData === 'string' ? errorData.substring(0, 200) : errorData,
-        message: error.message,
-        url: error.config?.url
-      });
+      console.error(`[Proxy] Monday API Error (${status})`);
 
-      // Always return JSON even if Monday returns HTML
       if (typeof errorData === 'string' && (errorData.includes('<!DOCTYPE html>') || errorData.includes('NOT_FOUND'))) {
         return res.status(status).json({ 
-          error: "Monday API returned an HTML/Text error page", 
+          error: "Monday Gateway Error (404/NOT_FOUND). Your account might be in a specific region or the API token is invalid for this URL.", 
           status,
           details: errorData.substring(0, 300) 
         });

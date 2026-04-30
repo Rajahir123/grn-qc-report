@@ -98,6 +98,7 @@ interface MondayContextType {
   setActiveView: (view: 'builder' | 'monitor') => void;
   customEmbedUrls: Record<string, string>;
   setCustomEmbedUrl: (boardId: string, url: string) => void;
+  logout: () => void;
 }
 
 const MondayContext = createContext<MondayContextType | undefined>(undefined);
@@ -210,6 +211,16 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'builder' | 'monitor'>('builder');
 
+  const logout = () => {
+    setToken(null);
+    setSelectedBoardId(null);
+    setBoardData(null);
+    localStorage.removeItem('monday_token');
+    localStorage.removeItem('selected_board_id');
+    localStorage.removeItem('custom_embed_urls');
+    setActiveView('builder');
+  };
+
   const submitReport = async (report: QCReport) => {
     if (!token || !selectedBoardId) return;
     setSyncStatus('syncing');
@@ -303,7 +314,8 @@ ${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notRecei
       activeView,
       setActiveView,
       customEmbedUrls,
-      setCustomEmbedUrl: (boardId, url) => setCustomEmbedUrls(prev => ({ ...prev, [boardId]: url }))
+      setCustomEmbedUrl: (boardId, url) => setCustomEmbedUrls(prev => ({ ...prev, [boardId]: url })),
+      logout
     }}>
       {children}
     </MondayContext.Provider>
@@ -452,7 +464,7 @@ function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => vo
 }
 
 function Sidebar() {
-  const { boards, setSelectedBoardId, selectedBoardId, setToken, activeView, setActiveView } = useMonday();
+  const { boards, setSelectedBoardId, selectedBoardId, logout, activeView, setActiveView } = useMonday();
   const [searchTerm, setSearchTerm] = useState('');
   const [manualId, setManualId] = useState('');
 
@@ -475,10 +487,11 @@ function Sidebar() {
           <span className="font-black uppercase tracking-[0.2em] text-xs">GRN System</span>
         </div>
         <button 
-          onClick={() => setToken(null)} 
-          className="opacity-20 hover:opacity-100 transition-opacity"
+          onClick={logout} 
+          className="opacity-20 hover:opacity-100 transition-opacity p-2 hover:bg-[#141414] hover:text-white rounded"
+          title="Switch Account & Reset"
         >
-          <LogOut size={14} />
+          <LogOut size={16} />
         </button>
       </div>
 
@@ -554,8 +567,7 @@ function Sidebar() {
           </button>
         </form>
         <div className="px-1 text-[8px] font-mono opacity-40 leading-tight">
-          Board ID is the number at the end of your browser URL<br/>
-          (e.g., .../boards/<span className="text-black font-bold">1234567890</span>)
+          Enter digits only. Your new board ID is found in your Monday.com browser URL.
         </div>
 
         <div className="flex items-center gap-3">
@@ -675,9 +687,8 @@ function QCReportView() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-12 custom-scrollbar bg-[#F5F5F5] print:p-0 print:bg-white flex flex-col items-center print:block print:overflow-visible">
-        {/* Printable Report Layout */}
-        <div className="w-full max-w-[1100px] bg-white border border-[#141414] shadow-2xl p-12 print:border-none print:shadow-none print:p-0">
+      <div className="flex-1 p-8 print:p-0">
+        <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-12 print:border-none print:shadow-none print:p-0">
           
           {/* Header Metadata */}
           <div className="grid grid-cols-4 border-2 border-[#141414] mb-8 divide-x-2 divide-[#141414]">
