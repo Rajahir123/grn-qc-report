@@ -96,6 +96,8 @@ interface MondayContextType {
   syncError: string | null;
   activeView: 'builder' | 'monitor';
   setActiveView: (view: 'builder' | 'monitor') => void;
+  customEmbedUrls: Record<string, string>;
+  setCustomEmbedUrl: (boardId: string, url: string) => void;
 }
 
 const MondayContext = createContext<MondayContextType | undefined>(undefined);
@@ -109,6 +111,17 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(localStorage.getItem('selected_board_id'));
   const [boardData, setBoardData] = useState<Board | null>(null);
+  const [customEmbedUrls, setCustomEmbedUrls] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('custom_embed_urls') || '{}');
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('custom_embed_urls', JSON.stringify(customEmbedUrls));
+  }, [customEmbedUrls]);
 
   useEffect(() => {
     if (token) {
@@ -278,7 +291,9 @@ ${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notRecei
       syncStatus,
       syncError,
       activeView,
-      setActiveView
+      setActiveView,
+      customEmbedUrls,
+      setCustomEmbedUrl: (boardId, url) => setCustomEmbedUrls(prev => ({ ...prev, [boardId]: url }))
     }}>
       {children}
     </MondayContext.Provider>
@@ -530,7 +545,7 @@ function Sidebar() {
         </form>
         <div className="px-1 text-[8px] font-mono opacity-40 leading-tight">
           Board ID is the number at the end of your browser URL<br/>
-          (e.g., .../boards/<span className="text-black font-bold">5028054300</span>)
+          (e.g., .../boards/<span className="text-black font-bold">1234567890</span>)
         </div>
 
         <div className="flex items-center gap-3">
@@ -877,12 +892,27 @@ function AppContent() {
 }
 
 function BoardLiveMonitor() {
-  const { selectedBoardId, boardData } = useMonday();
+  const { selectedBoardId, boardData, customEmbedUrls, setCustomEmbedUrl } = useMonday();
+  const [isEditingEmbed, setIsEditingEmbed] = useState(false);
+  const [tempUrl, setTempUrl] = useState('');
   
-  // Use the user-provided embed code if it matches the current board ID
-  const embedUrl = selectedBoardId === "5028054300" 
-    ? "https://view.monday.com/embed/5028054300-cbb49652489fffc0fed23c233bdc54f9?r=apse2"
+  const currentEmbedUrl = (selectedBoardId && customEmbedUrls[selectedBoardId]) 
+    ? customEmbedUrls[selectedBoardId]
     : `https://view.monday.com/embed/${selectedBoardId}`;
+
+  const handleUpdateEmbed = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedBoardId && tempUrl.trim()) {
+      // Extract URL from iframe if they pasted the whole block
+      let url = tempUrl.trim();
+      const match = url.match(/src="([^"]+)"/);
+      if (match) url = match[1];
+      
+      setCustomEmbedUrl(selectedBoardId, url);
+      setIsEditingEmbed(false);
+      setTempUrl('');
+    }
+  };
 
   return (
     <div className="flex-1 bg-[#F5F5F5] flex flex-col h-screen overflow-hidden print:hidden">
@@ -896,11 +926,49 @@ function BoardLiveMonitor() {
             <p className="text-[10px] font-mono opacity-40 uppercase">Live Synchronization View</p>
           </div>
         </div>
+        <button 
+          onClick={() => {
+            setTempUrl(customEmbedUrls[selectedBoardId || ''] || '');
+            setIsEditingEmbed(!isEditingEmbed);
+          }}
+          className="flex items-center gap-2 px-4 py-2 border border-[#141414] text-[10px] font-bold uppercase tracking-widest hover:bg-gray-50 transition-all"
+        >
+          <Settings size={14} /> {isEditingEmbed ? 'Cancel' : 'Update Embed Link'}
+        </button>
       </div>
+
+      <AnimatePresence>
+        {isEditingEmbed && (
+          <motion.div 
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-[#141414] text-white overflow-hidden"
+          >
+            <form onSubmit={handleUpdateEmbed} className="p-6 flex gap-4 items-end">
+              <div className="flex-1 space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Paste Share Embed Link or Iframe Code</label>
+                <input 
+                  type="text"
+                  value={tempUrl}
+                  onChange={(e) => setTempUrl(e.target.value)}
+                  placeholder="https://view.monday.com/embed/..."
+                  className="w-full bg-white/10 border border-white/20 p-3 text-xs font-mono focus:outline-none focus:bg-white/20"
+                />
+              </div>
+              <button type="submit" className="bg-white text-[#141414] px-8 py-3 font-black uppercase text-[10px] tracking-widest hover:invert transition-all h-[46px]">
+                Save Link
+              </button>
+            </form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex-1 p-8">
         <div className="w-full h-full bg-white border-2 border-[#141414] shadow-[12px_12px_0px_0px_rgba(0,0,0,0.1)] overflow-hidden">
           <iframe 
-            src={embedUrl}
+            key={currentEmbedUrl} // Force reload on URL change
+            src={currentEmbedUrl}
             width="100%" 
             height="100%" 
             style={{ border: 0 }}
