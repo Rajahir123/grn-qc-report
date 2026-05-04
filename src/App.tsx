@@ -113,7 +113,7 @@ interface MondayContextType {
   setSelectedBoardId: (id: string | null) => void;
   boardData: Board | null;
   fetchBoardDetails: (id: string, customToken?: string) => Promise<any>;
-  mondayRequest: (query: string) => Promise<any>;
+  mondayRequest: (query: string, overrideToken?: string) => Promise<any>;
   submitReport: (report: QCReport) => Promise<void>;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncError: string | null;
@@ -166,12 +166,13 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectedBoardId, token]);
 
-  const mondayRequest = async (query: string) => {
-    if (!token) throw new Error("Authentication required");
+  const mondayRequest = async (query: string, overrideToken?: string) => {
+    const activeToken = overrideToken || token;
+    if (!activeToken) throw new Error("Authentication required");
     
     const response = await fetch('/api/monday/proxy', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+      headers: { 'Content-Type': 'application/json', 'x-monday-token': activeToken },
       body: JSON.stringify({ query })
     });
 
@@ -241,7 +242,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
             }
           }
         }
-      `);
+      `, activeToken);
 
       if (!data.data || !data.data.boards || data.data.boards.length === 0) {
         throw new Error("Board not found. You may not have permission to view it.");
