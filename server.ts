@@ -78,11 +78,14 @@ async function startServer() {
     
     const maskedToken = `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
     
-    // Select the best endpoint. Monday API endpoints DO NOT usually want a trailing slash.
+    // Select the best endpoint. We try several variations because regional gateways (like bom1) 
+    // can be sensitive to trailing slashes or specific paths.
     const endpoints = [
+      "https://api.monday.com/v2/",
       "https://api.monday.com/v2",
+      "https://api.eu.monday.com/v2/",
       "https://api.eu.monday.com/v2",
-      "https://api.monday.com/v2/graphql" // Another potential variation
+      "https://api.monday.com/v2/graphql"
     ];
 
     let lastError: any = null;
@@ -93,11 +96,11 @@ async function startServer() {
         const response = await axios.post(endpoint, req.body, {
           headers: {
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "Authorization": token,
-            "x-monday-api-key": token,
             "API-Version": "2024-04" 
           },
-          timeout: 12000 
+          timeout: 15000 // Increased timeout for regional routing
         });
 
         // Some Monday errors come back as 200 but with an "errors" array
@@ -112,8 +115,8 @@ async function startServer() {
         
         console.warn(`[Proxy] Error at ${endpoint}: Status ${status}`);
 
-        // If it's a 404, we might be hitting the wrong region gateway. Try the next.
-        if (status === 404 && endpoint !== endpoints[endpoints.length - 1]) {
+        // If it's a 404/NOT_FOUND, try the next choice.
+        if ((status === 404 || status === 502) && endpoint !== endpoints[endpoints.length - 1]) {
           continue;
         }
 
