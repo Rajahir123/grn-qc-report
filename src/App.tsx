@@ -113,6 +113,7 @@ interface MondayContextType {
   setSelectedBoardId: (id: string | null) => void;
   boardData: Board | null;
   fetchBoardDetails: (id: string, customToken?: string) => Promise<any>;
+  mondayRequest: (query: string) => Promise<any>;
   submitReport: (report: QCReport) => Promise<void>;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncError: string | null;
@@ -165,25 +166,43 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectedBoardId, token]);
 
+  const mondayRequest = async (query: string) => {
+    if (!token) throw new Error("Authentication required");
+    
+    const response = await fetch('/api/monday/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+      body: JSON.stringify({ query })
+    });
+
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      console.error("[App] Failed to parse JSON response:", text.substring(0, 500));
+      throw new Error(`Invalid response format from server (Received ${response.status}). The page might be unavailable.`);
+    }
+
+    if (data.proxy_error || !response.ok) {
+      let msg = data.error || `Request failed (${response.status})`;
+      if (data.details) msg += `: ${data.details}`;
+      throw new Error(msg);
+    }
+
+    if (data.errors) {
+      throw new Error(data.errors[0].message);
+    }
+
+    return data;
+  };
+
   const fetchBoards = async () => {
     if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/monday/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
-        body: JSON.stringify({
-          query: '{ boards (limit: 500) { id name description } }'
-        })
-      });
-      
-      const data = await response.json();
-      if (data.proxy_error || !response.ok) {
-        throw new Error(data.error || `Boards fetch failed (${response.status})`);
-      }
-      
-      if (data.errors) throw new Error(data.errors[0].message);
+      const data = await mondayRequest('{ boards (limit: 500) { id name description } }');
       setBoards(data.data.boards || []);
     } catch (err: any) {
       setError(err.message);
@@ -195,55 +214,34 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   const fetchBoardDetails = async (id: string, customToken?: string) => {
     const activeToken = customToken || token;
     if (!activeToken || !id || id === 'null' || id === 'undefined') {
-      console.warn("[App] Skipping fetchBoardDetails: invalid id or token", { id, hasToken: !!activeToken });
       return;
     }
 
     setLoading(true);
     setError(null);
     try {
-      console.log(`[App] Fetching board details for ID: ${id}`);
-      const response = await fetch('/api/monday/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': activeToken },
-        body: JSON.stringify({
-          query: `
-            query {
-              boards (ids: [${id}]) {
+      const data = await mondayRequest(`
+        query {
+          boards (ids: [${id}]) {
+            id
+            name
+            description
+            columns { id title type }
+            items_page (limit: 50) {
+              items {
                 id
                 name
-                description
-                columns { id title type }
-                items_page (limit: 50) {
-                  items {
-                    id
-                    name
-                    column_values {
-                      id
-                      text
-                      value
-                      column { id title }
-                    }
-                  }
+                column_values {
+                  id
+                  text
+                  value
+                  column { id title }
                 }
               }
             }
-          `
-        })
-      });
-
-      const data = await response.json();
-      
-      // Handle the "Proxy Error" pattern I'm about to implement in server.ts
-      if (data.proxy_error || !response.ok) {
-        let msg = data.error || `Request failed (${response.status})`;
-        if (data.details) msg += `: ${data.details}`;
-        throw new Error(msg);
-      }
-
-      if (data.errors) {
-        throw new Error(data.errors[0].message);
-      }
+          }
+        }
+      `);
 
       if (!data.data || !data.data.boards || data.data.boards.length === 0) {
         throw new Error("Board not found. You may not have permission to view it.");
@@ -280,28 +278,13 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     setSyncError(null);
     try {
       const itemName = `${report.qcNo} | ${report.partyName} | ${report.state}`;
-      const creationResponse = await fetch('/api/monday/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
-        body: JSON.stringify({
-          query: `
-            mutation {
-              create_item (board_id: "${selectedBoardId}", item_name: ${JSON.stringify(itemName)}) {
-                id
-              }
-            }
-          `
-        })
-      });
-      
-      const creationData = await creationResponse.json();
-      if (creationData.proxy_error || !creationResponse.ok) {
-        throw new Error(creationData.error || `Creation failed (${creationResponse.status})`);
-      }
-      
-      if (creationData.errors) {
-        throw new Error(creationData.errors.map((e: any) => e.message).join(', '));
-      }
+      const creationData = await mondayRequest(`
+        mutation {
+          create_item (board_id: "${selectedBoardId}", item_name: ${JSON.stringify(itemName)}) {
+            id
+          }
+        }
+      `);
       
       if (!creationData.data?.create_item?.id) {
         throw new Error("Failed to create item. Check if the Board ID exists and your token has write access.");
@@ -322,27 +305,13 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
 **APPROVE BY:** ${report.approvedBy}
       `;
 
-      const updateResponse = await fetch('/api/monday/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
-        body: JSON.stringify({
-          query: `
-            mutation {
-              create_update (item_id: "${mainItemId}", body: ${JSON.stringify(tableMarkdown)}) {
-                id
-              }
-            }
-          `
-        })
-      });
-
-      const updateData = await updateResponse.json();
-      if (updateData.proxy_error || !updateResponse.ok) {
-        throw new Error(updateData.error || `Update failed (${updateResponse.status})`);
-      }
-      if (updateData.errors) {
-        throw new Error("Item created, but failed to add details: " + updateData.errors[0].message);
-      }
+      await mondayRequest(`
+        mutation {
+          create_update (item_id: "${mainItemId}", body: ${JSON.stringify(tableMarkdown)}) {
+            id
+          }
+        }
+      `);
 
       setSyncStatus('success');
       setTimeout(() => setSyncStatus('idle'), 5000);
@@ -357,6 +326,7 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
     <MondayContext.Provider value={{ 
       token, setToken, boards, loading, error, fetchBoards, 
       selectedBoardId, setSelectedBoardId, boardData, fetchBoardDetails,
+      mondayRequest,
       submitReport,
       syncStatus,
       syncError,
@@ -1050,7 +1020,7 @@ function AppContent() {
 }
 
 function Dashboard() {
-  const { boardData, token, selectedBoardId } = useMonday();
+  const { boardData, token, selectedBoardId, mondayRequest } = useMonday();
   const [analyticsData, setAnalyticsData] = useState<QCReport[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
@@ -1063,34 +1033,22 @@ function Dashboard() {
     setIsDataLoading(true);
     setDataError(null);
     try {
-      const response = await fetch('/api/monday/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
-        body: JSON.stringify({
-          query: `
-            query {
-              boards (ids: [${selectedBoardId}]) {
-                items_page (limit: 500) {
-                  items {
-                    id
-                    name
-                    updates (limit: 1) {
-                      body
-                    }
-                  }
+      const result = await mondayRequest(`
+        query {
+          boards (ids: [${selectedBoardId}]) {
+            items_page (limit: 500) {
+              items {
+                id
+                name
+                updates (limit: 1) {
+                  body
                 }
               }
             }
-          `
-        })
-      });
+          }
+        }
+      `);
 
-      const result = await response.json();
-      if (result.proxy_error || !response.ok) {
-        throw new Error(result.error || `Data fetch failed (${response.status})`);
-      }
-      if (result.errors) throw new Error(result.errors[0].message);
-      
       const board = result.data?.boards?.[0];
       if (!board) throw new Error("Board not found. It may have been deleted or your permissions changed.");
       
