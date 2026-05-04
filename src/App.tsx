@@ -181,8 +181,10 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     try {
       data = JSON.parse(text);
     } catch (e) {
-      console.error("[App] Failed to parse JSON response:", text.substring(0, 500));
-      throw new Error(`Invalid response format from server (Received ${response.status}). The page might be unavailable.`);
+      console.error("[App] Failed to parse JSON response. Status:", response.status, "Raw Text:", text.substring(0, 200));
+      // If the text looks like HTML but the status is 404, it's likely a missing route or server error page
+      const snippet = text.substring(0, 100);
+      throw new Error(`The server returned an unexpected format (Status ${response.status}). It might be an HTML error page: "${snippet}..."`);
     }
 
     if (data.proxy_error || !response.ok) {

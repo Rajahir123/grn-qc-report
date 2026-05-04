@@ -13,6 +13,13 @@ async function startServer() {
   app.use(express.json({ limit: '1mb' }));
 
   // API Routes
+  app.use((req, res, next) => {
+    if (req.url.startsWith('/api')) {
+      console.log(`[Server] ${req.method} ${req.url}`);
+    }
+    next();
+  });
+
   app.post("/api/export/gsheet", async (req, res) => {
     const { url, data } = req.body;
     
@@ -118,15 +125,18 @@ async function startServer() {
     const errorData = lastError.response?.data;
     const failedUrl = lastError.config?.url || "unknown";
     
-    // RETURN 200 with an error object to ensure client can parse it
-    // instead of letting the browser/proxy handle a 404/500
-    let detailedMsg = typeof errorData === 'string' ? errorData.substring(0, 500) : "No details";
-    if (detailedMsg.includes("<!DOCTYPE html>")) detailedMsg = "Received HTML response instead of JSON (likely Gateway 404)";
+    // RETURN JSON with the status code from Monday (or 500)
+    let detailedMsg = typeof errorData === 'string' ? errorData.substring(0, 1000) : JSON.stringify(errorData || "No details").substring(0, 500);
+    if (detailedMsg.includes("<!DOCTYPE html>")) {
+      detailedMsg = "Received HTML response instead of JSON. This often means the Monday.com API URL used in server.ts is incorrect for your region or the token is definitely invalid.";
+    }
 
-    res.json({ 
+    console.error(`[Proxy] Final failure for all endpoints. Status: ${status}, Message: ${lastError.message}`);
+
+    res.status(status).json({ 
       proxy_error: true,
       status: status,
-      error: `Monday API failed at ${failedUrl}`,
+      error: `Monday API failure`,
       details: detailedMsg,
       message: lastError.message
     });
