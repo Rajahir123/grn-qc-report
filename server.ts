@@ -13,13 +13,6 @@ async function startServer() {
   app.use(express.json({ limit: '1mb' }));
 
   // API Routes
-  app.use((req, res, next) => {
-    if (req.url.startsWith('/api')) {
-      console.log(`[Server] ${req.method} ${req.url}`);
-    }
-    next();
-  });
-
   app.post("/api/export/gsheet", async (req, res) => {
     const { url, data } = req.body;
     
@@ -72,77 +65,51 @@ async function startServer() {
     }
 
     token = token.trim();
-    if (token.toLowerCase().startsWith("bearer ")) {
-      token = token.substring(7).trim();
-    }
-    
     const maskedToken = `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
-    
-    // Select the best endpoint. We try several variations because regional gateways (like bom1) 
-    // can be sensitive to trailing slashes or specific paths.
-    const endpoints = [
-      "https://api.monday.com/v2/",
-      "https://api.monday.com/v2",
-      "https://api.eu.monday.com/v2/",
-      "https://api.eu.monday.com/v2",
-      "https://api.monday.com/v2/graphql"
-    ];
+    console.log(`[Proxy] POST to Monday API with token ${maskedToken}`);
 
-    let lastError: any = null;
+    try {
+      const response = await axios.post("https://api.monday.com/v2", req.body, {
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": token,
+          "API-Version": "2024-04"
+        }
+      });
+      res.json(response.data);
+    } catch (error: any) {
+      const status = error.response?.status || 500;
+      const errorData = error.response?.data;
+      
+      console.error(`[Proxy] Monday API Error (${status})`);
 
-    for (const endpoint of endpoints) {
-      try {
-        console.log(`[Proxy] Attempting Monday API at ${endpoint} with token ${maskedToken}`);
-        const response = await axios.post(endpoint, req.body, {
-          headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": token,
-            "API-Version": "2024-04" 
-          },
-          timeout: 15000 // Increased timeout for regional routing
+      if (status === 503) {
+        return res.status(503).json({
+          error: "Monday.com API is temporarily unavailable (503). This is typically a transient issue with Monday's servers. Please try again in a few moments.",
+          status: 503,
+          details: error.message
         });
-
-        // Some Monday errors come back as 200 but with an "errors" array
-        if (response.data && response.data.errors) {
-          console.warn("[Proxy] Monday returned 200 but with errors:", response.data.errors[0].message);
-        }
-
-        return res.json(response.data);
-      } catch (error: any) {
-        lastError = error;
-        const status = error.response?.status;
-        
-        console.warn(`[Proxy] Error at ${endpoint}: Status ${status}`);
-
-        // If it's a 404/NOT_FOUND, try the next choice.
-        if ((status === 404 || status === 502) && endpoint !== endpoints[endpoints.length - 1]) {
-          continue;
-        }
-
-        break;
       }
+
+      if (typeof errorData === 'string' && (errorData.includes('<!DOCTYPE html>') || errorData.includes('NOT_FOUND'))) {
+        return res.status(status).json({ 
+          error: "Monday Gateway Error (404/NOT_FOUND). Your account might be in a specific region or the API token is invalid for this URL.", 
+          status,
+          details: errorData.substring(0, 300) 
+        });
+      }
+
+      if (status === 401 || status === 403) {
+        return res.status(status).json({
+          error: `Monday Authentication Error (${status}): ${errorData?.error_message || "Invalid or insufficient API token permissions."}`,
+          status,
+          details: "If you are an admin, ensure you use the Personal Token from Administration > API. If you are a member, ensure you have access to the board.",
+          raw: errorData
+        });
+      }
+
+      res.status(status).json(errorData || { error: "Failed to connect to Monday.com" });
     }
-
-    const status = lastError.response?.status || 500;
-    const errorData = lastError.response?.data;
-    const failedUrl = lastError.config?.url || "unknown";
-    
-    // RETURN JSON with the status code from Monday (or 500)
-    let detailedMsg = typeof errorData === 'string' ? errorData.substring(0, 1000) : JSON.stringify(errorData || "No details").substring(0, 500);
-    if (detailedMsg.includes("<!DOCTYPE html>")) {
-      detailedMsg = "Received HTML response instead of JSON. This often means the Monday.com API URL used in server.ts is incorrect for your region or the token is definitely invalid.";
-    }
-
-    console.error(`[Proxy] Final failure for all endpoints. Status: ${status}, Message: ${lastError.message}`);
-
-    res.status(status).json({ 
-      proxy_error: true,
-      status: status,
-      error: `Monday API failure`,
-      details: detailedMsg,
-      message: lastError.message
-    });
   });
 
   // Add a GET for debugging
