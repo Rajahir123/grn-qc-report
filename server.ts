@@ -66,50 +66,72 @@ async function startServer() {
 
     token = token.trim();
     const maskedToken = `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
-    console.log(`[Proxy] POST to Monday API with token ${maskedToken}`);
+    
+    // Select the best endpoint. Start with global.
+    const endpoints = [
+      "https://api.monday.com/v2/",
+      "https://api.eu.monday.com/v2/"
+    ];
 
-    try {
-      const response = await axios.post("https://api.monday.com/v2", req.body, {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": token,
-          "API-Version": "2024-04"
+    let lastError: any = null;
+
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`[Proxy] Attempting Monday API at ${endpoint} with token ${maskedToken}`);
+        const response = await axios.post(endpoint, req.body, {
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": token,
+            "API-Version": "2024-10" // Updated to latest stable
+          },
+          timeout: 10000 // 10s timeout
+        });
+
+        // If we get here, it worked. Return it.
+        return res.json(response.data);
+      } catch (error: any) {
+        lastError = error;
+        const status = error.response?.status;
+        
+        // If it's a 404, we might be hitting the wrong region. Try the next endpoint.
+        if (status === 404 && endpoint !== endpoints[endpoints.length - 1]) {
+          console.warn(`[Proxy] 404 at ${endpoint}. Retrying with next endpoint...`);
+          continue;
         }
-      });
-      res.json(response.data);
-    } catch (error: any) {
-      const status = error.response?.status || 500;
-      const errorData = error.response?.data;
-      
-      console.error(`[Proxy] Monday API Error (${status})`);
 
-      if (status === 503) {
-        return res.status(503).json({
-          error: "Monday.com API is temporarily unavailable (503). This is typically a transient issue with Monday's servers. Please try again in a few moments.",
-          status: 503,
-          details: error.message
-        });
+        // If it's not a 404 or we're at the last endpoint, handle the error
+        break;
       }
-
-      if (typeof errorData === 'string' && (errorData.includes('<!DOCTYPE html>') || errorData.includes('NOT_FOUND'))) {
-        return res.status(status).json({ 
-          error: "Monday Gateway Error (404/NOT_FOUND). Your account might be in a specific region or the API token is invalid for this URL.", 
-          status,
-          details: errorData.substring(0, 300) 
-        });
-      }
-
-      if (status === 401 || status === 403) {
-        return res.status(status).json({
-          error: `Monday Authentication Error (${status}): ${errorData?.error_message || "Invalid or insufficient API token permissions."}`,
-          status,
-          details: "If you are an admin, ensure you use the Personal Token from Administration > API. If you are a member, ensure you have access to the board.",
-          raw: errorData
-        });
-      }
-
-      res.status(status).json(errorData || { error: "Failed to connect to Monday.com" });
     }
+
+    // Handle errors from the last attempt (or the one that broke the loop)
+    const status = lastError.response?.status || 500;
+    const errorData = lastError.response?.data;
+    
+    console.error(`[Proxy] Monday API Final Error (${status})`);
+
+    // Ensure we always return JSON
+    if (typeof errorData === 'string' && (errorData.includes('<!DOCTYPE html>') || errorData.includes('NOT_FOUND') || errorData.includes('The page could not be found'))) {
+      return res.status(status).json({ 
+        error: "Monday Gateway Error (404/NOT_FOUND). Your account might be in a specific region or the API token is invalid for this URL.", 
+        status,
+        details: errorData.substring(0, 300) 
+      });
+    }
+
+    if (status === 401 || status === 403) {
+      return res.status(status).json({
+        error: `Monday Authentication Error (${status}): ${errorData?.error_message || "Invalid or insufficient API token permissions."}`,
+        status,
+        details: "Check your API token. Use the Personal Token from Administration > API. Also ensure the token has 'Workspaces', 'Boards:Read', and 'Boards:Write' scopes.",
+        raw: errorData
+      });
+    }
+
+    res.status(status).json(errorData && typeof errorData === 'object' ? errorData : { 
+      error: lastError.message || "Failed to connect to Monday.com",
+      details: typeof errorData === 'string' ? errorData.substring(0, 500) : null
+    });
   });
 
   // Add a GET for debugging
