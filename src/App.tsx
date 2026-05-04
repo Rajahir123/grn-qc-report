@@ -177,6 +177,12 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
           query: '{ boards (limit: 500) { id name description } }'
         })
       });
+      
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Server Error (${response.status}): ${text.substring(0, 100)}`);
+      }
+      
       const data = await response.json();
       if (data.errors) throw new Error(data.errors[0].message);
       setBoards(data.data.boards || []);
@@ -221,6 +227,12 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
           `
         })
       });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Board details fetch failed (${response.status}): ${text.substring(0, 100)}`);
+      }
+
       const data = await response.json();
       if (data.errors) throw new Error(data.errors[0].message);
       if (!data.data.boards || data.data.boards.length === 0) {
@@ -271,15 +283,8 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       });
       
       if (!creationResponse.ok) {
-        let errorMessage = `Creation failed (${creationResponse.status})`;
-        try {
-          const errorData = await creationResponse.json();
-          if (errorData.error) errorMessage = errorData.error;
-        } catch (e) {
-          const text = await creationResponse.text();
-          if (text) errorMessage += `: ${text.substring(0, 100)}`;
-        }
-        throw new Error(errorMessage);
+        const text = await creationResponse.text();
+        throw new Error(`Creation failed (${creationResponse.status}): ${text.substring(0, 100)}`);
       }
 
       const creationData = await creationResponse.json();
@@ -322,15 +327,8 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
       });
 
       if (!updateResponse.ok) {
-        let errorMessage = `Update failed (${updateResponse.status})`;
-        try {
-          const errorData = await updateResponse.json();
-          if (errorData.error) errorMessage = errorData.error;
-        } catch (e) {
-          const text = await updateResponse.text();
-          if (text) errorMessage += `: ${text.substring(0, 100)}`;
-        }
-        throw new Error(errorMessage);
+        const text = await updateResponse.text();
+        throw new Error(`Update failed (${updateResponse.status}): ${text.substring(0, 100)}`);
       }
 
       const updateData = await updateResponse.json();
@@ -1078,6 +1076,12 @@ function Dashboard() {
           `
         })
       });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Data fetch failed (${response.status}): ${text.substring(0, 100)}`);
+      }
+
       const result = await response.json();
       if (result.errors) throw new Error(result.errors[0].message);
       
