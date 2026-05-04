@@ -65,12 +65,17 @@ async function startServer() {
     }
 
     token = token.trim();
+    if (token.toLowerCase().startsWith("bearer ")) {
+      token = token.substring(7).trim();
+    }
+    
     const maskedToken = `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
     
-    // Select the best endpoint. Start with global.
+    // Select the best endpoint. Monday API endpoints DO NOT usually want a trailing slash.
     const endpoints = [
-      "https://api.monday.com/v2/",
-      "https://api.eu.monday.com/v2/"
+      "https://api.monday.com/v2",
+      "https://api.eu.monday.com/v2",
+      "https://api.monday.com/v2/graphql" // Another potential variation
     ];
 
     let lastError: any = null;
@@ -82,55 +87,48 @@ async function startServer() {
           headers: {
             "Content-Type": "application/json",
             "Authorization": token,
-            "API-Version": "2024-10" // Updated to latest stable
+            "x-monday-api-key": token,
+            "API-Version": "2024-04" 
           },
-          timeout: 10000 // 10s timeout
+          timeout: 12000 
         });
 
-        // If we get here, it worked. Return it.
+        // Some Monday errors come back as 200 but with an "errors" array
+        if (response.data && response.data.errors) {
+          console.warn("[Proxy] Monday returned 200 but with errors:", response.data.errors[0].message);
+        }
+
         return res.json(response.data);
       } catch (error: any) {
         lastError = error;
         const status = error.response?.status;
         
-        // If it's a 404, we might be hitting the wrong region. Try the next endpoint.
+        console.warn(`[Proxy] Error at ${endpoint}: Status ${status}`);
+
+        // If it's a 404, we might be hitting the wrong region gateway. Try the next.
         if (status === 404 && endpoint !== endpoints[endpoints.length - 1]) {
-          console.warn(`[Proxy] 404 at ${endpoint}. Retrying with next endpoint...`);
           continue;
         }
 
-        // If it's not a 404 or we're at the last endpoint, handle the error
         break;
       }
     }
 
-    // Handle errors from the last attempt (or the one that broke the loop)
     const status = lastError.response?.status || 500;
     const errorData = lastError.response?.data;
+    const failedUrl = lastError.config?.url || "unknown";
     
-    console.error(`[Proxy] Monday API Final Error (${status})`);
+    // RETURN 200 with an error object to ensure client can parse it
+    // instead of letting the browser/proxy handle a 404/500
+    let detailedMsg = typeof errorData === 'string' ? errorData.substring(0, 500) : "No details";
+    if (detailedMsg.includes("<!DOCTYPE html>")) detailedMsg = "Received HTML response instead of JSON (likely Gateway 404)";
 
-    // Ensure we always return JSON
-    if (typeof errorData === 'string' && (errorData.includes('<!DOCTYPE html>') || errorData.includes('NOT_FOUND') || errorData.includes('The page could not be found'))) {
-      return res.status(status).json({ 
-        error: "Monday Gateway Error (404/NOT_FOUND). Your account might be in a specific region or the API token is invalid for this URL.", 
-        status,
-        details: errorData.substring(0, 300) 
-      });
-    }
-
-    if (status === 401 || status === 403) {
-      return res.status(status).json({
-        error: `Monday Authentication Error (${status}): ${errorData?.error_message || "Invalid or insufficient API token permissions."}`,
-        status,
-        details: "Check your API token. Use the Personal Token from Administration > API. Also ensure the token has 'Workspaces', 'Boards:Read', and 'Boards:Write' scopes.",
-        raw: errorData
-      });
-    }
-
-    res.status(status).json(errorData && typeof errorData === 'object' ? errorData : { 
-      error: lastError.message || "Failed to connect to Monday.com",
-      details: typeof errorData === 'string' ? errorData.substring(0, 500) : null
+    res.json({ 
+      proxy_error: true,
+      status: status,
+      error: `Monday API failed at ${failedUrl}`,
+      details: detailedMsg,
+      message: lastError.message
     });
   });
 

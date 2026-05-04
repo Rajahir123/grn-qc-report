@@ -178,12 +178,11 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
       
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Server Error (${response.status}): ${text.substring(0, 100)}`);
+      const data = await response.json();
+      if (data.proxy_error || !response.ok) {
+        throw new Error(data.error || `Boards fetch failed (${response.status})`);
       }
       
-      const data = await response.json();
       if (data.errors) throw new Error(data.errors[0].message);
       setBoards(data.data.boards || []);
     } catch (err: any) {
@@ -195,10 +194,15 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
 
   const fetchBoardDetails = async (id: string, customToken?: string) => {
     const activeToken = customToken || token;
-    if (!activeToken) return;
+    if (!activeToken || !id || id === 'null' || id === 'undefined') {
+      console.warn("[App] Skipping fetchBoardDetails: invalid id or token", { id, hasToken: !!activeToken });
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
+      console.log(`[App] Fetching board details for ID: ${id}`);
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-monday-token': activeToken },
@@ -228,19 +232,27 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Board details fetch failed (${response.status}): ${text.substring(0, 100)}`);
+      const data = await response.json();
+      
+      // Handle the "Proxy Error" pattern I'm about to implement in server.ts
+      if (data.proxy_error || !response.ok) {
+        let msg = data.error || `Request failed (${response.status})`;
+        if (data.details) msg += `: ${data.details}`;
+        throw new Error(msg);
       }
 
-      const data = await response.json();
-      if (data.errors) throw new Error(data.errors[0].message);
-      if (!data.data.boards || data.data.boards.length === 0) {
-        throw new Error("The board does not exist or you don't have access to it.");
+      if (data.errors) {
+        throw new Error(data.errors[0].message);
       }
+
+      if (!data.data || !data.data.boards || data.data.boards.length === 0) {
+        throw new Error("Board not found. You may not have permission to view it.");
+      }
+
       setBoardData(data.data.boards[0]);
       return data.data.boards[0];
     } catch (err: any) {
+      console.error("[App] fetchBoardDetails error:", err);
       setError(err.message);
       throw err;
     } finally {
@@ -282,12 +294,10 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
       
-      if (!creationResponse.ok) {
-        const text = await creationResponse.text();
-        throw new Error(`Creation failed (${creationResponse.status}): ${text.substring(0, 100)}`);
-      }
-
       const creationData = await creationResponse.json();
+      if (creationData.proxy_error || !creationResponse.ok) {
+        throw new Error(creationData.error || `Creation failed (${creationResponse.status})`);
+      }
       
       if (creationData.errors) {
         throw new Error(creationData.errors.map((e: any) => e.message).join(', '));
@@ -326,12 +336,10 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
         })
       });
 
-      if (!updateResponse.ok) {
-        const text = await updateResponse.text();
-        throw new Error(`Update failed (${updateResponse.status}): ${text.substring(0, 100)}`);
-      }
-
       const updateData = await updateResponse.json();
+      if (updateData.proxy_error || !updateResponse.ok) {
+        throw new Error(updateData.error || `Update failed (${updateResponse.status})`);
+      }
       if (updateData.errors) {
         throw new Error("Item created, but failed to add details: " + updateData.errors[0].message);
       }
@@ -1077,12 +1085,10 @@ function Dashboard() {
         })
       });
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Data fetch failed (${response.status}): ${text.substring(0, 100)}`);
-      }
-
       const result = await response.json();
+      if (result.proxy_error || !response.ok) {
+        throw new Error(result.error || `Data fetch failed (${response.status})`);
+      }
       if (result.errors) throw new Error(result.errors[0].message);
       
       const board = result.data?.boards?.[0];
