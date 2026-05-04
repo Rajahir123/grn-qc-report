@@ -13,6 +13,45 @@ async function startServer() {
   app.use(express.json({ limit: '1mb' }));
 
   // API Routes
+  app.post("/api/export/gsheet", async (req, res) => {
+    const { url, data } = req.body;
+    
+    if (!url) {
+      return res.status(400).json({ error: "Missing G-Sheet Webhook URL" });
+    }
+
+    try {
+      console.log(`[Export] Sending data to G-Sheet Webhook: ${url.substring(0, 40)}...`);
+      const response = await axios.post(url, data, {
+        headers: {
+          "Content-Type": "application/json"
+        },
+        maxRedirects: 5
+      });
+      console.log(`[Export] G-Sheet Success:`, response.status);
+      res.json({ success: true, details: response.data });
+    } catch (error: any) {
+      const status = error.response?.status || 500;
+      const errorData = error.response?.data;
+      
+      console.error(`[Export] G-Sheet Error (${status}):`, error.message);
+      if (errorData) console.error(`[Export] Error details:`, typeof errorData === 'string' ? errorData.substring(0, 500) : errorData);
+
+      let message = "Failed to export to Google Sheets";
+      if (status === 401 || status === 403) {
+        message = "G-Sheet Access Denied (401/403). Ensure your Web App is deployed with 'Access: Anyone'.";
+      } else if (status === 404) {
+        message = "G-Sheet Webhook URL not found (404). Check your URL.";
+      }
+
+      res.status(status).json({ 
+        error: message, 
+        details: error.message,
+        status 
+      });
+    }
+  });
+
   app.post("/api/monday/proxy", async (req, res) => {
     const headerToken = req.headers['x-monday-token'];
     const envToken = process.env.MONDAY_API_TOKEN;
@@ -43,6 +82,14 @@ async function startServer() {
       const errorData = error.response?.data;
       
       console.error(`[Proxy] Monday API Error (${status})`);
+
+      if (status === 503) {
+        return res.status(503).json({
+          error: "Monday.com API is temporarily unavailable (503). This is typically a transient issue with Monday's servers. Please try again in a few moments.",
+          status: 503,
+          details: error.message
+        });
+      }
 
       if (typeof errorData === 'string' && (errorData.includes('<!DOCTYPE html>') || errorData.includes('NOT_FOUND'))) {
         return res.status(status).json({ 

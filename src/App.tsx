@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
+import React, { useState, useEffect, createContext, useContext, useRef, useMemo } from 'react';
 import { 
   BarChart3, 
   Settings, 
@@ -19,10 +19,30 @@ import {
   Save,
   Trash2,
   FileText,
-  X
+  X,
+  Menu,
+  Share2,
+  Database,
+  Check,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { SKUS } from './lib/skus';
+import { SKUS, type SKUMapping } from './lib/skus';
+
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer, 
+  Cell,
+  PieChart,
+  Pie
+} from 'recharts';
+import { format, parse, isBefore, isValid } from 'date-fns';
+import { toZonedTime } from 'date-fns-tz';
 
 // --- Types ---
 
@@ -57,12 +77,14 @@ interface Board {
 }
 
 interface QCRow {
-  sku: string;
-  billQty: number;
-  received: number;
-  notReceived: number;
-  reject: number;
-  damages: string;
+  oldSku: string;
+  newSku: string;
+  billQtyUnit: number;
+  receivedUnit: number;
+  notReceivedUnit: number;
+  expiredUnit: number;
+  damagesRepairable: number;
+  rejectNonRepairable: number;
   use: string;
   batchCode: string;
   mfgDate: string;
@@ -94,11 +116,16 @@ interface MondayContextType {
   submitReport: (report: QCReport) => Promise<void>;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncError: string | null;
-  activeView: 'builder' | 'monitor';
-  setActiveView: (view: 'builder' | 'monitor') => void;
+  activeView: 'builder' | 'monitor' | 'dashboard';
+  setActiveView: (view: 'builder' | 'monitor' | 'dashboard') => void;
   customEmbedUrls: Record<string, string>;
   setCustomEmbedUrl: (boardId: string, url: string) => void;
   logout: () => void;
+  gsheetUrl: string | null;
+  setGsheetUrl: (url: string | null) => void;
+  exportToGSheet: (report: QCReport) => Promise<void>;
+  exportStatus: 'idle' | 'loading' | 'success' | 'error';
+  exportError: string | null;
 }
 
 const MondayContext = createContext<MondayContextType | undefined>(undefined);
@@ -209,16 +236,69 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<'builder' | 'monitor'>('builder');
+  const [activeView, setActiveView] = useState<'builder' | 'monitor' | 'dashboard'>('builder');
+  const [gsheetUrl, setGsheetUrl] = useState<string | null>(localStorage.getItem('gsheet_webhook_url'));
+  const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (gsheetUrl) {
+      localStorage.setItem('gsheet_webhook_url', gsheetUrl);
+    } else {
+      localStorage.removeItem('gsheet_webhook_url');
+    }
+  }, [gsheetUrl]);
 
   const logout = () => {
     setToken(null);
     setSelectedBoardId(null);
     setBoardData(null);
+    setGsheetUrl(null);
     localStorage.removeItem('monday_token');
     localStorage.removeItem('selected_board_id');
     localStorage.removeItem('custom_embed_urls');
+    localStorage.removeItem('gsheet_webhook_url');
     setActiveView('builder');
+  };
+
+  const exportToGSheet = async (report: QCReport) => {
+    if (!gsheetUrl) return;
+    setExportStatus('loading');
+    try {
+      const response = await fetch('/api/export/gsheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: gsheetUrl,
+          data: {
+            qcNo: report.qcNo,
+            lrNo: report.lrNo,
+            date: report.date,
+            boxQty: report.boxQty,
+            partyName: report.partyName,
+            state: report.state,
+            approvedBy: report.approvedBy,
+            rows: report.rows
+          }
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || 'Export failed');
+      }
+
+      setExportStatus('success');
+      setExportError(null);
+      setTimeout(() => setExportStatus('idle'), 3000);
+    } catch (err: any) {
+      console.error('Export Error:', err.message);
+      setExportStatus('error');
+      setExportError(err.message);
+      setTimeout(() => setExportStatus('idle'), 5000);
+      setTimeout(() => setExportError(null), 8000);
+    }
   };
 
   const submitReport = async (report: QCReport) => {
@@ -242,8 +322,15 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       });
       
       if (!creationResponse.ok) {
-        const errorText = await creationResponse.text();
-        throw new Error(`Creation failed (${creationResponse.status}): ${errorText.substring(0, 150)}`);
+        let errorMessage = `Creation failed (${creationResponse.status})`;
+        try {
+          const errorData = await creationResponse.json();
+          if (errorData.error) errorMessage = errorData.error;
+        } catch (e) {
+          const text = await creationResponse.text();
+          if (text) errorMessage += `: ${text.substring(0, 100)}`;
+        }
+        throw new Error(errorMessage);
       }
 
       const creationData = await creationResponse.json();
@@ -264,9 +351,9 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
 **DATE:** ${report.date} | **BOX QTY:** ${report.boxQty}
 **PARTY:** ${report.partyName} | **STATE:** ${report.state}
 
-| SKU | BILL QTY | REC | NOT REC | REJ | DMG | USE | BATCH | MFG | EXP |
-|---|---|---|---|---|---|---|---|---|---|
-${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notReceived} | ${r.reject} | ${r.damages} | ${r.use} | ${r.batchCode} | ${r.mfgDate} | ${r.expDate} |`).join('\n')}
+| OLD SKU | NEW SKU | BILL QTY | RECEIVED | EXPIRED | NOT RECEIVED | DMG (R) | REJ (NR) | USE | BATCH | MFG | EXP |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.receivedUnit} | ${r.expiredUnit} | ${r.notReceivedUnit} | ${r.damagesRepairable} | ${r.rejectNonRepairable} | ${r.use} | ${r.batchCode} | ${r.mfgDate} | ${r.expDate} |`).join('\n')}
 
 **APPROVE BY:** ${report.approvedBy}
       `;
@@ -286,8 +373,15 @@ ${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notRecei
       });
 
       if (!updateResponse.ok) {
-        const errorText = await updateResponse.text();
-        throw new Error(`Update failed (${updateResponse.status}): ${errorText.substring(0, 150)}`);
+        let errorMessage = `Update failed (${updateResponse.status})`;
+        try {
+          const errorData = await updateResponse.json();
+          if (errorData.error) errorMessage = errorData.error;
+        } catch (e) {
+          const text = await updateResponse.text();
+          if (text) errorMessage += `: ${text.substring(0, 100)}`;
+        }
+        throw new Error(errorMessage);
       }
 
       const updateData = await updateResponse.json();
@@ -315,7 +409,12 @@ ${report.rows.map(r => `| ${r.sku} | ${r.billQty} | ${r.received} | ${r.notRecei
       setActiveView,
       customEmbedUrls,
       setCustomEmbedUrl: (boardId, url) => setCustomEmbedUrls(prev => ({ ...prev, [boardId]: url })),
-      logout
+      logout,
+      gsheetUrl,
+      setGsheetUrl,
+      exportToGSheet,
+      exportStatus,
+      exportError
     }}>
       {children}
     </MondayContext.Provider>
@@ -463,7 +562,7 @@ function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => vo
   );
 }
 
-function Sidebar() {
+function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   const { boards, setSelectedBoardId, selectedBoardId, logout, activeView, setActiveView } = useMonday();
   const [searchTerm, setSearchTerm] = useState('');
   const [manualId, setManualId] = useState('');
@@ -476,116 +575,147 @@ function Sidebar() {
       setSelectedBoardId(manualId.trim());
       setManualId('');
       setActiveView('builder');
+      onClose();
     }
   };
 
   return (
-    <div className="w-72 bg-[#E4E3E0] border-r border-[#141414] flex flex-col h-screen print:hidden">
-      <div className="p-6 border-b border-[#141414] flex justify-between items-center bg-white/20">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-[#141414]" />
-          <span className="font-black uppercase tracking-[0.2em] text-xs">GRN System</span>
-        </div>
-        <button 
-          onClick={logout} 
-          className="opacity-20 hover:opacity-100 transition-opacity p-2 hover:bg-[#141414] hover:text-white rounded"
-          title="Switch Account & Reset"
-        >
-          <LogOut size={16} />
-        </button>
-      </div>
-
-      {/* Navigation Tabs */}
-      <div className="flex border-b border-[#141414]">
-        <button 
-          onClick={() => setActiveView('builder')}
-          className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'builder' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
-        >
-          Form Builder
-        </button>
-        <button 
-          onClick={() => setActiveView('monitor')}
-          className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'monitor' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
-        >
-          Live Monitor
-        </button>
-      </div>
-
-      <div className="p-4 border-b border-[#141414]/10">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" size={14} />
-          <input 
-            type="text"
-            placeholder="Filter boards..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-white/50 border border-[#141414] py-2 pl-9 pr-4 text-xs focus:outline-none focus:bg-white transition-all"
+    <>
+      {/* Backdrop for mobile */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="fixed inset-0 bg-black/60 z-[60] lg:hidden backdrop-blur-sm"
           />
-        </div>
-      </div>
+        )}
+      </AnimatePresence>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
-        <div className="space-y-px">
-          {filteredBoards.length > 0 ? (
-            filteredBoards.map(board => (
-              <button
-                key={board.id}
-                onClick={() => setSelectedBoardId(board.id)}
-                className={`w-full flex items-center gap-3 px-6 py-4 text-left transition-all border-b border-[#141414]/10 group 
-                  ${selectedBoardId === board.id ? 'bg-[#141414] text-white' : 'hover:bg-white/40'}`}
-              >
-                <Layout size={16} className={selectedBoardId === board.id ? 'text-white' : 'opacity-40'} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate uppercase tracking-tight">{board.name}</p>
-                  <p className={`text-[10px] font-mono truncate opacity-40 ${selectedBoardId === board.id ? 'text-white/60' : ''}`}>
-                    ID: {board.id}
-                  </p>
-                </div>
-                <ChevronRight size={14} className={`opacity-0 group-hover:opacity-100 transition-all ${selectedBoardId === board.id ? 'text-white opacity-40' : ''}`} />
-              </button>
-            ))
-          ) : (
-            <div className="p-12 text-center">
-              <p className="text-[10px] font-mono uppercase opacity-30">{searchTerm ? 'No matches' : 'No boards found'}</p>
-            </div>
-          )}
+      <div className={`
+        fixed inset-y-0 left-0 z-[70] transition-transform duration-300 transform lg:relative lg:translate-x-0 lg:inset-auto
+        ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+        w-80 h-full bg-[#E4E3E0] border-r border-[#141414] flex flex-col print:hidden
+      `}>
+        <div className="p-6 border-b border-[#141414] flex justify-between items-center bg-white/20">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-[#141414]" />
+            <span className="font-black uppercase tracking-[0.2em] text-xs">GRN System</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={logout} 
+              className="opacity-20 hover:opacity-100 transition-opacity p-2 hover:bg-[#141414] hover:text-white rounded"
+              title="Switch Account & Reset"
+            >
+              <LogOut size={16} />
+            </button>
+            <button onClick={onClose} className="lg:hidden p-2 opacity-50 hover:opacity-100">
+              <X size={20} />
+            </button>
+          </div>
         </div>
-      </div>
-      
-      <div className="p-4 bg-[#DEDCD7] border-t border-[#141414] space-y-4">
-        {/* Manual Connect */}
-        <form onSubmit={handleManualConnect} className="relative">
-          <input 
-            type="text"
-            placeholder="Direct Board ID..."
-            value={manualId}
-            onChange={(e) => setManualId(e.target.value)}
-            className="w-full bg-white/50 border border-[#141414] py-2 pl-3 pr-10 text-[10px] uppercase font-bold focus:outline-none focus:bg-white"
-          />
-          <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-[#141414]/10">
-            <ExternalLink size={12} />
+
+        {/* Navigation Tabs */}
+        <div className="flex border-b border-[#141414]">
+          <button 
+            onClick={() => { setActiveView('builder'); onClose(); }}
+            className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'builder' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
+          >
+            Builder
           </button>
-        </form>
-        <div className="px-1 text-[8px] font-mono opacity-40 leading-tight">
-          Enter digits only. Your new board ID is found in your Monday.com browser URL.
+          <button 
+            onClick={() => { setActiveView('monitor'); onClose(); }}
+            className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'monitor' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
+          >
+            Monitor
+          </button>
+          <button 
+            onClick={() => { setActiveView('dashboard'); onClose(); }}
+            className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'dashboard' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
+          >
+            Analytics
+          </button>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-green-500 border border-[#141414] flex items-center justify-center">
-            <div className="w-3 h-3 bg-white rounded-full animate-pulse" />
+        <div className="p-4 border-b border-[#141414]/10">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" size={14} />
+            <input 
+              type="text"
+              placeholder="Filter boards..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-white/50 border border-[#141414] py-2 pl-9 pr-4 text-xs focus:outline-none focus:bg-white transition-all"
+            />
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/60">Connected</p>
-            <p className="text-[10px] font-mono truncate text-[#141414]/40">Active Session</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="space-y-px">
+            {filteredBoards.length > 0 ? (
+              filteredBoards.map(board => (
+                <button
+                  key={board.id}
+                  onClick={() => { setSelectedBoardId(board.id); onClose(); }}
+                  className={`w-full flex items-center gap-3 px-6 py-4 text-left transition-all border-b border-[#141414]/10 group 
+                    ${selectedBoardId === board.id ? 'bg-[#141414] text-white' : 'hover:bg-white/40'}`}
+                >
+                  <Layout size={16} className={selectedBoardId === board.id ? 'text-white' : 'opacity-40'} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate uppercase tracking-tight">{board.name}</p>
+                    <p className={`text-[10px] font-mono truncate opacity-40 ${selectedBoardId === board.id ? 'text-white/60' : ''}`}>
+                      ID: {board.id}
+                    </p>
+                  </div>
+                  <ChevronRight size={14} className={`opacity-0 group-hover:opacity-100 transition-all ${selectedBoardId === board.id ? 'text-white opacity-40' : ''}`} />
+                </button>
+              ))
+            ) : (
+              <div className="p-12 text-center">
+                <p className="text-[10px] font-mono uppercase opacity-30">{searchTerm ? 'No matches' : 'No boards found'}</p>
+              </div>
+            )}
+          </div>
+        </div>
+        
+        <div className="p-4 bg-[#DEDCD7] border-t border-[#141414] space-y-4">
+          <form onSubmit={handleManualConnect} className="relative">
+            <input 
+              type="text"
+              placeholder="Direct Board ID..."
+              value={manualId}
+              onChange={(e) => setManualId(e.target.value)}
+              className="w-full bg-white/50 border border-[#141414] py-2 pl-3 pr-10 text-[10px] uppercase font-bold focus:outline-none focus:bg-white"
+            />
+            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-[#141414]/10">
+              <ExternalLink size={12} />
+            </button>
+          </form>
+          
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full border border-[#141414] flex items-center justify-center transition-colors ${selectedBoardId ? 'bg-green-500' : 'bg-red-500'}`}>
+              <div className={`w-3 h-3 bg-white rounded-full ${selectedBoardId ? 'animate-pulse' : ''}`} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/60">
+                {selectedBoardId ? 'Connected' : 'Disconnected'}
+              </p>
+              <p className="text-[10px] font-mono truncate text-[#141414]/40">
+                {selectedBoardId ? `Session: ${selectedBoardId}` : 'Select a board'}
+              </p>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
 function QCReportView() {
-  const { submitReport, syncStatus, syncError, boardData } = useMonday();
+  const { submitReport, syncStatus, syncError, boardData, gsheetUrl, setGsheetUrl, exportToGSheet, exportStatus, exportError } = useMonday();
   const [report, setReport] = useState<QCReport>({
     qcNo: 'QC-' + Math.floor(1000 + Math.random() * 9000),
     lrNo: '',
@@ -600,17 +730,18 @@ function QCReportView() {
   const [isSkuPickerOpen, setIsSkuPickerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  const addSku = (sku: string) => {
-    if (report.rows.some(r => r.sku === sku)) return;
+  const addSku = (skuMapping: SKUMapping) => {
     setReport({
       ...report,
       rows: [...report.rows, {
-        sku,
-        billQty: 0,
-        received: 0,
-        notReceived: 0,
-        reject: 0,
-        damages: '',
+        oldSku: skuMapping.oldSku,
+        newSku: skuMapping.newSku,
+        billQtyUnit: 0,
+        receivedUnit: 0,
+        notReceivedUnit: 0,
+        expiredUnit: 0,
+        damagesRepairable: 0,
+        rejectNonRepairable: 0,
         use: '',
         batchCode: '',
         mfgDate: '',
@@ -642,40 +773,166 @@ function QCReportView() {
   return (
     <div className="flex-1 bg-[#F5F5F5] flex flex-col h-screen overflow-hidden font-sans print:block print:h-auto print:overflow-visible">
       {/* Action Header */}
-      <div className="bg-white p-6 border-b border-[#141414] flex justify-between items-center z-10 shrink-0 print:hidden">
-        <div className="flex items-center gap-6">
-          <div className="px-4 py-2 bg-[#141414] text-white flex items-center gap-3">
-            <FileText size={18} />
-            <span className="font-black uppercase tracking-[0.2em] text-xs">QC Engine</span>
+      <div className="bg-white p-4 lg:p-6 border-b border-[#141414] flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 z-10 shrink-0 print:hidden">
+        <div className="flex items-center gap-4 lg:gap-6">
+          <div className="px-3 lg:px-4 py-2 bg-[#141414] text-white flex items-center gap-2 lg:gap-3">
+            <FileText size={16} />
+            <span className="font-black uppercase tracking-[0.2em] text-[10px] lg:text-xs">QC Engine</span>
           </div>
           <div>
-            <span className="text-[10px] font-bold uppercase tracking-widest opacity-40 block">Board Context</span>
-            <span className="text-xs font-black uppercase text-[#141414]">{boardData?.name || 'Local Mode'}</span>
+            <span className="text-[9px] font-bold uppercase tracking-widest opacity-40 block">Board Context</span>
+            <span className="text-[10px] lg:text-xs font-black uppercase text-[#141414] truncate max-w-[150px] block">{boardData?.name || 'Local Mode'}</span>
           </div>
         </div>
-        <div className="flex gap-4">
+        <div className="flex gap-3 lg:gap-4">
           <button 
             onClick={handlePrint}
-            className="flex items-center gap-2 px-6 py-3 border border-[#141414] font-bold uppercase tracking-widest text-[10px] hover:bg-gray-50 transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none"
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 border border-[#141414] font-bold uppercase tracking-widest text-[9px] lg:text-[10px] hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none"
           >
-            <Printer size={14} /> Print Report
+            <Printer size={12} /> <span className="hidden sm:inline">Print Report</span><span className="sm:hidden">Print</span>
           </button>
           <button 
             onClick={() => submitReport(report)}
             disabled={syncStatus === 'syncing' || report.rows.length === 0}
-            className={`flex items-center gap-2 px-8 py-3 font-black uppercase tracking-[0.2em] text-[10px] transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,0.2)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50 ${
+            className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 lg:px-8 py-2.5 lg:py-3 font-black uppercase tracking-[0.2em] text-[9px] lg:text-[10px] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50 ${
               syncStatus === 'success' ? 'bg-green-600 text-white' : 
               syncStatus === 'error' ? 'bg-red-600 text-white' : 
               'bg-[#141414] text-white hover:invert'
             }`}
           >
-            <Save size={14} /> 
+            <Save size={12} /> 
             {syncStatus === 'syncing' ? 'Syncing...' : 
              syncStatus === 'success' ? 'Synced!' : 
-             syncStatus === 'error' ? 'Retry Sync' : 'Sync to Monday'}
+             syncStatus === 'error' ? 'Retry' : 'Sync'}
+          </button>
+          
+          <button 
+            onClick={() => exportToGSheet(report)}
+            disabled={exportStatus === 'loading' || !gsheetUrl || report.rows.length === 0}
+            className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 font-bold uppercase tracking-widest text-[9px] lg:text-[10px] border border-[#141414] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50 ${
+              exportStatus === 'success' ? 'bg-green-100 text-green-800' :
+              exportStatus === 'error' ? 'bg-red-100 text-red-800' :
+              'bg-white hover:bg-gray-50'
+            }`}
+            title={!gsheetUrl ? "Set G-Sheet URL in settings to enable" : "Export to Google Sheets"}
+          >
+            <Share2 size={12} /> 
+            {exportStatus === 'loading' ? 'Exporting...' : 
+             exportStatus === 'success' ? 'Exported!' : 
+             exportStatus === 'error' ? 'Failed' : 'Export Data'}
+          </button>
+
+          <button 
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            className="flex items-center justify-center p-2 bg-gray-100 border border-[#141414] hover:bg-gray-200 transition-all"
+          >
+            <Settings size={16} />
           </button>
         </div>
       </div>
+
+      {/* G-Sheet Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="bg-[#141414] text-white p-6 lg:p-8 z-[20] border-b border-white/10 shadow-2xl"
+          >
+            <div className="max-w-6xl mx-auto">
+              <div className="flex flex-col lg:flex-row gap-8">
+                <div className="flex-1 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white/60">
+                      <Database size={14} className="text-white" /> Google Sheets Webhook URL
+                    </label>
+                    <span className="text-[9px] font-mono text-white/30 uppercase">Required for Export</span>
+                  </div>
+                  <input 
+                    type="text" 
+                    value={gsheetUrl || ''} 
+                    onChange={e => setGsheetUrl(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    className="w-full bg-white/5 border border-white/20 p-4 text-xs font-mono focus:outline-none focus:border-white/50 focus:bg-white/10 transition-all placeholder:opacity-20"
+                  />
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">
+                    <div className="bg-white/5 p-4 border border-white/10">
+                      <h4 className="text-[10px] font-black uppercase tracking-widest mb-3 flex items-center gap-2">
+                        <Check size={12} className="text-green-400" /> Setup Instructions
+                      </h4>
+                      <ol className="text-[9px] space-y-2 text-white/70 font-medium">
+                        <li>1. Open Google Sheet &gt; Extensions &gt; Apps Script</li>
+                        <li>2. Paste the script on the right into the editor</li>
+                        <li>3. Click <strong className="text-white">Deploy &gt; New Deployment</strong></li>
+                        <li>4. Select type: <strong className="text-white">Web App</strong></li>
+                        <li>5. Set <strong>"Who has access"</strong> to <strong className="text-white uppercase text-green-400 font-black">Anyone</strong></li>
+                        <li className="pt-2 text-[8px] text-orange-300 leading-tight border-t border-white/5 mt-2">
+                          <strong>Note:</strong> If "Anyone" is missing (Workspace users), use a personal <strong>@gmail.com</strong> account instead.
+                        </li>
+                      </ol>
+                    </div>
+
+                    <div className="bg-white/5 p-4 border border-white/10 relative">
+                      <h4 className="text-[10px] font-black uppercase tracking-widest mb-3">Sample Apps Script</h4>
+                      <pre className="text-[8px] font-mono text-white/40 overflow-x-auto bg-black/30 p-2 max-h-[120px] custom-scrollbar">
+{`function doPost(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheets()[0];
+  var data = JSON.parse(e.postData.contents);
+  var rows = data.rows || [];
+  
+  rows.forEach(function(row) {
+    sheet.appendRow([
+      data.qcNo, data.lrNo, data.date, 
+      data.partyName, data.state, 
+      row.oldSku, row.newSku, row.billQtyUnit,
+      row.receivedUnit, row.expiredUnit, row.notReceivedUnit,
+      row.use, row.mfgDate, row.expDate,
+      new Date()
+    ]);
+  });
+  
+  return ContentService.createTextOutput(
+    JSON.stringify({result: "success"})
+  ).setMimeType(ContentService.MimeType.JSON);
+}`}
+                      </pre>
+                      <button 
+                        onClick={() => {
+                          const code = `function doPost(e) {\n  var ss = SpreadsheetApp.getActiveSpreadsheet();\n  var sheet = ss.getSheets()[0];\n  var data = JSON.parse(e.postData.contents);\n  var rows = data.rows || [];\n  \n  rows.forEach(function(row) {\n    sheet.appendRow([\n      data.qcNo, data.lrNo, data.date, \n      data.partyName, data.state, \n      row.oldSku, row.newSku, row.billQtyUnit,\n      row.receivedUnit, row.expiredUnit, row.notReceivedUnit,\n      row.use, row.mfgDate, row.expDate,\n      new Date()\n    ]);\n  });\n  \n  return ContentService.createTextOutput(\n    JSON.stringify({result: "success"})\n  ).setMimeType(ContentService.MimeType.JSON);\n}`;
+                          navigator.clipboard.writeText(code);
+                        }}
+                        className="absolute top-4 right-4 text-[8px] uppercase font-bold bg-white/10 hover:bg-white/20 px-2 py-1 transition-all"
+                      >
+                        Copy Script
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:w-64 flex flex-col justify-end gap-3">
+                  <div className="p-4 bg-orange-500/10 border border-orange-500/20 rounded-sm">
+                    <h5 className="text-[9px] font-black uppercase mb-1 text-orange-400">Workspace Error (401/403)</h5>
+                    <p className="text-[8px] text-orange-100/70 font-medium leading-relaxed">
+                      If you only see <strong>"Anyone with a Google Account"</strong>, your company blocks anonymous access.
+                      <br/><br/>
+                      <span className="text-white">FIX: Use a personal <strong>@gmail.com</strong> account to host the sheet.</span>
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setIsSettingsOpen(false)}
+                    className="w-full bg-white text-[#141414] px-8 py-4 font-black uppercase text-[11px] tracking-[0.2em] hover:bg-gray-200 transition-all shadow-[6px_6px_0px_0px_rgba(255,255,255,0.2)] active:translate-x-1 active:translate-y-1 active:shadow-none"
+                  >
+                    Save & Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {syncError && (
         <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-between animate-pulse">
@@ -687,57 +944,77 @@ function QCReportView() {
         </div>
       )}
 
-      <div className="flex-1 p-8 print:p-0">
-        <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-12 print:border-none print:shadow-none print:p-0">
+      <AnimatePresence>
+        {exportError && (
+          <motion.div 
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-red-600 text-white overflow-hidden"
+          >
+            <div className="px-6 py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Database size={12} />
+                <span>Export Failed: {exportError}</span>
+              </div>
+              <X size={12} className="cursor-pointer opacity-50 hover:opacity-100" />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex-1 p-4 lg:p-8 print:p-0 overflow-y-auto custom-scrollbar">
+        <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-4 lg:p-12 print:border-none print:shadow-none print:p-0">
           
           {/* Header Metadata */}
-          <div className="grid grid-cols-4 border-2 border-[#141414] mb-8 divide-x-2 divide-[#141414]">
-            <div className="p-3">
-              <label className="text-[9px] font-bold uppercase block opacity-50 mb-1">QC.NO-</label>
-              <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-sm focus:outline-none" />
+          <div className="grid grid-cols-2 md:grid-cols-4 border-2 border-[#141414] mb-4 lg:mb-8 divide-x-2 divide-y-2 md:divide-y-0 divide-[#141414]">
+            <div className="p-2 lg:p-3">
+              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">QC.NO-</label>
+              <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
             </div>
-            <div className="p-3">
-              <label className="text-[9px] font-bold uppercase block opacity-50 mb-1">LR NO-</label>
-              <input type="text" value={report.lrNo} onChange={e => setReport({...report, lrNo: e.target.value})} className="w-full font-mono text-sm focus:outline-none" />
+            <div className="p-2 lg:p-3">
+              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">LR NO-</label>
+              <input type="text" value={report.lrNo} onChange={e => setReport({...report, lrNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
             </div>
-            <div className="p-3">
-              <label className="text-[9px] font-bold uppercase block opacity-50 mb-1">DATE-</label>
-              <input type="date" value={report.date} onChange={e => setReport({...report, date: e.target.value})} className="w-full font-mono text-sm focus:outline-none" />
+            <div className="p-2 lg:p-3 border-t-2 md:border-t-0">
+              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">DATE-</label>
+              <input type="date" value={report.date} onChange={e => setReport({...report, date: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
             </div>
-            <div className="p-3">
-              <label className="text-[9px] font-bold uppercase block opacity-50 mb-1">BOX QTY-</label>
-              <input type="text" value={report.boxQty} onChange={e => setReport({...report, boxQty: e.target.value})} className="w-full font-mono text-sm focus:outline-none" />
+            <div className="p-2 lg:p-3 border-t-2 md:border-t-0">
+              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">BOX QTY-</label>
+              <input type="text" value={report.boxQty} onChange={e => setReport({...report, boxQty: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
             </div>
           </div>
 
-          <div className="text-center py-6 mb-8 border-b-4 border-double border-[#141414]">
-            <h1 className="text-3xl font-black uppercase tracking-[0.3em] inline-block">
+          <div className="text-center py-4 lg:py-6 mb-6 lg:mb-8 border-b-4 border-double border-[#141414]">
+            <h1 className="text-xl lg:text-3xl font-black uppercase tracking-[0.2em] lg:tracking-[0.3em] inline-block">
               Sales Return QC Report (GRN)
             </h1>
           </div>
 
-          <div className="grid grid-cols-4 border-2 border-[#141414] mb-6 divide-x-2 divide-[#141414]">
-            <div className="col-span-3 p-4 flex items-center gap-4">
-              <label className="text-[11px] font-bold uppercase whitespace-nowrap">Party Name:</label>
-              <input type="text" value={report.partyName} onChange={e => setReport({...report, partyName: e.target.value})} className="w-full text-base font-semibold focus:outline-none" />
+          <div className="flex flex-col md:grid md:grid-cols-4 border-2 border-[#141414] mb-6 divide-y-2 md:divide-y-0 md:divide-x-2 divide-[#141414]">
+            <div className="md:col-span-3 p-3 lg:p-4 flex items-center gap-3 lg:gap-4">
+              <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">Party Name:</label>
+              <input type="text" value={report.partyName} onChange={e => setReport({...report, partyName: e.target.value})} className="w-full text-sm lg:text-base font-semibold focus:outline-none" />
             </div>
-            <div className="p-4 flex items-center gap-4">
-              <label className="text-[11px] font-bold uppercase whitespace-nowrap">State:</label>
-              <input type="text" value={report.state} onChange={e => setReport({...report, state: e.target.value})} className="w-full text-base font-semibold focus:outline-none" />
+            <div className="p-3 lg:p-4 flex items-center gap-3 lg:gap-4">
+              <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">State:</label>
+              <input type="text" value={report.state} onChange={e => setReport({...report, state: e.target.value})} className="w-full text-sm lg:text-base font-semibold focus:outline-none" />
             </div>
           </div>
 
           {/* QC Table */}
-          <div className="border-2 border-[#141414] overflow-hidden">
-            <table className="w-full border-collapse text-[10px]">
+          <div className="border-2 border-[#141414] overflow-x-auto custom-scrollbar">
+            <table className="w-full border-collapse text-[9px] lg:text-[10px] min-w-[800px]">
               <thead>
                 <tr className="bg-gray-100 font-bold uppercase border-b-2 border-[#141414]">
-                  <th rowSpan={2} className="border-r-2 border-[#141414] p-2 min-w-[120px]">SKU</th>
+                  <th rowSpan={2} className="border-r-2 border-[#141414] p-2 min-w-[80px]">Old SKU</th>
+                  <th rowSpan={2} className="border-r-2 border-[#141414] p-2 min-w-[100px]">New SKU</th>
                   <th className="border-r border-[#141414] p-1">Bill Qty</th>
                   <th className="border-r border-[#141414] p-1">Received</th>
+                  <th className="border-r border-[#141414] p-1 text-orange-600">Expired</th>
                   <th className="border-r border-[#141414] p-1">Not Received</th>
-                  <th className="border-r border-[#141414] p-1">Reject(Expire)</th>
-                  <th rowSpan={2} className="border-r border-[#141414] p-1">Damages</th>
+                  <th colSpan={2} className="border-r border-[#141414] p-1">Status</th>
                   <th rowSpan={2} className="border-r border-[#141414] p-1">Use</th>
                   <th rowSpan={2} className="border-r border-[#141414] p-1 min-w-[80px]">Batch Code</th>
                   <th className="border-r border-[#141414] p-1">MFG</th>
@@ -745,9 +1022,11 @@ function QCReportView() {
                 </tr>
                 <tr className="bg-gray-100 text-[8px] border-b-2 border-[#141414]">
                   <th className="border-r border-[#141414] p-1 uppercase opacity-60">Unit</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-orange-50/50">Unit</th>
                   <th className="border-r border-[#141414] p-1 uppercase opacity-60">Unit</th>
                   <th className="border-r border-[#141414] p-1 uppercase opacity-60">Unit</th>
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-60">Unit</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-green-50/50">Repairable</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-red-50/50">Non Repairable</th>
                   <th className="border-r border-[#141414] p-1 uppercase opacity-40">Date</th>
                   <th className="uppercase opacity-40">Date</th>
                 </tr>
@@ -756,32 +1035,36 @@ function QCReportView() {
                 {report.rows.length > 0 ? (
                   report.rows.map((row, idx) => (
                     <tr key={idx} className="border-b border-[#141414] hover:bg-black/5 group">
-                      <td className="p-2 border-r-2 border-[#141414] font-bold uppercase relative">
-                        {row.sku}
+                      <td className="p-2 border-r-2 border-[#141414] font-bold uppercase relative bg-gray-50/30">
+                        {row.oldSku}
                         <button onClick={() => removeRow(idx)} className="absolute right-1 top-1/2 -translate-y-1/2 text-red-500 opacity-0 group-hover:opacity-100 print:hidden p-1">
                           <Trash2 size={12} />
                         </button>
                       </td>
-                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.billQty || ''} onChange={e => updateRow(idx, { billQty: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.received || ''} onChange={e => updateRow(idx, { received: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.notReceived || ''} onChange={e => updateRow(idx, { notReceived: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.reject || ''} onChange={e => updateRow(idx, { reject: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="text" value={row.damages} onChange={e => updateRow(idx, { damages: e.target.value })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="text" value={row.use} onChange={e => updateRow(idx, { use: e.target.value })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="text" value={row.batchCode} onChange={e => updateRow(idx, { batchCode: e.target.value })} className="w-full p-2 text-center font-mono focus:outline-none" /></td>
+                      <td className="border-r-2 border-[#141414] font-mono text-[9px] uppercase">{row.newSku}</td>
+                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.billQtyUnit || ''} onChange={e => updateRow(idx, { billQtyUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
+                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.receivedUnit || ''} onChange={e => updateRow(idx, { receivedUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
+                      <td className="border-r border-[#141414] p-0 bg-orange-50/20"><input type="number" value={row.expiredUnit || ''} onChange={e => updateRow(idx, { expiredUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent font-bold text-orange-700" /></td>
+                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.notReceivedUnit || ''} onChange={e => updateRow(idx, { notReceivedUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
+                      <td className="border-r border-[#141414] p-0 bg-green-50/20"><input type="number" value={row.damagesRepairable || ''} onChange={e => updateRow(idx, { damagesRepairable: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
+                      <td className="border-r border-[#141414] p-0 bg-red-50/20"><input type="number" value={row.rejectNonRepairable || ''} onChange={e => updateRow(idx, { rejectNonRepairable: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
+                      <td className="border-r border-[#141414] p-0"><input type="text" value={row.use} onChange={e => updateRow(idx, { use: e.target.value })} className="w-full p-2 text-center focus:outline-none uppercase" /></td>
+                      <td className="border-r border-[#141414] p-0"><input type="text" value={row.batchCode} onChange={e => updateRow(idx, { batchCode: e.target.value })} className="w-full p-2 text-center font-mono focus:outline-none uppercase" /></td>
                       <td className="border-r border-[#141414] p-0"><input type="text" placeholder="MM/YY" value={row.mfgDate} onChange={e => updateRow(idx, { mfgDate: e.target.value })} className="w-full p-2 text-center text-[9px] focus:outline-none" /></td>
                       <td className="p-0"><input type="text" placeholder="MM/YY" value={row.expDate} onChange={e => updateRow(idx, { expDate: e.target.value })} className="w-full p-2 text-center text-[9px] focus:outline-none" /></td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={10} className="p-12 text-center text-gray-400 italic font-serif">Add SKUs using the selector bottom right &rarr;</td>
+                    <td colSpan={12} className="p-12 text-center text-gray-400 italic font-serif">Add SKUs using the selector bottom right &rarr;</td>
                   </tr>
                 )}
                 {/* Visual padding rows */}
-                {Array.from({ length: Math.max(0, 12 - report.rows.length) }).map((_, i) => (
+                {Array.from({ length: Math.max(0, 10 - report.rows.length) }).map((_, i) => (
                   <tr key={`empty-${i}`} className="h-10 border-b border-[#141414]/10">
                     <td className="border-r-2 border-[#141414]"></td>
+                    <td className="border-r-2 border-[#141414]"></td>
+                    <td className="border-r border-[#141414]"></td>
                     <td className="border-r border-[#141414]"></td>
                     <td className="border-r border-[#141414]"></td>
                     <td className="border-r border-[#141414]"></td>
@@ -797,20 +1080,20 @@ function QCReportView() {
             </table>
           </div>
 
-          <div className="mt-8 flex justify-between items-end border-t-2 border-[#141414] pt-8">
+          <div className="mt-8 flex flex-col sm:flex-row justify-between items-stretch sm:items-end border-t-2 border-[#141414] pt-8 gap-6">
             <div className="flex border-2 border-[#141414] divide-x-2 divide-[#141414]">
-              <div className="p-4 w-48 bg-gray-50 flex flex-col justify-between min-h-[80px]">
-                <span className="text-[9px] font-bold uppercase opacity-50">Approve By</span>
-                <span className="text-[9px] font-bold uppercase opacity-50">Signature</span>
+              <div className="p-3 lg:p-4 w-32 lg:w-48 bg-gray-50 flex flex-col justify-between min-h-[70px] lg:min-h-[80px]">
+                <span className="text-[8px] lg:text-[9px] font-bold uppercase opacity-50">Approve By</span>
+                <span className="text-[8px] lg:text-[9px] font-bold uppercase opacity-50">Signature</span>
               </div>
-              <div className="p-4 w-64 flex flex-col justify-between min-h-[80px]">
-                <input type="text" value={report.approvedBy} onChange={e => setReport({...report, approvedBy: e.target.value})} className="font-serif italic text-lg focus:outline-none" />
-                <div className="border-t border-dotted border-[#141414]/20 pt-1 text-[10px] font-mono opacity-20">SYSTEM_SIGN_OFF</div>
+              <div className="p-3 lg:p-4 flex-1 sm:w-64 flex flex-col justify-between min-h-[70px] lg:min-h-[80px]">
+                <input type="text" value={report.approvedBy} onChange={e => setReport({...report, approvedBy: e.target.value})} className="font-serif italic text-base lg:text-lg focus:outline-none w-full" />
+                <div className="border-t border-dotted border-[#141414]/20 pt-1 text-[8px] lg:text-[10px] font-mono opacity-20">SYSTEM_SIGN_OFF</div>
               </div>
             </div>
-            <div className="text-right">
-              <p className="text-[10px] font-mono opacity-20 uppercase tracking-[0.2em]">Sales Return GRN Module</p>
-              <p className="text-[9px] font-mono opacity-10 uppercase tracking-tighter">Powered by Industrial QC System</p>
+            <div className="text-right sm:text-right">
+              <p className="text-[8px] lg:text-[10px] font-mono opacity-20 uppercase tracking-[0.2em]">Sales Return GRN Module</p>
+              <p className="text-[7px] lg:text-[9px] font-mono opacity-10 uppercase tracking-tighter">Powered by Industrial QC System</p>
             </div>
           </div>
         </div>
@@ -831,13 +1114,17 @@ function QCReportView() {
                 <X size={14} className="cursor-pointer" onClick={() => setIsSkuPickerOpen(false)} />
               </h3>
               <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
-                {SKUS.filter(s => !report.rows.some(r => r.sku === s)).map(sku => (
+                {SKUS.map(sku => (
                   <button 
-                    key={sku} 
+                    key={sku.oldSku} 
                     onClick={() => addSku(sku)}
-                    className="w-full p-2 border border-[#141414]/10 hover:border-[#141414] hover:bg-[#141414] hover:text-white text-[10px] uppercase font-bold text-left transition-all"
+                    className="w-full p-3 border border-[#141414]/10 hover:border-[#141414] hover:bg-[#141414] hover:text-white group transition-all"
                   >
-                    {sku}
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-black uppercase tracking-tight">{sku.oldSku}</span>
+                      <ChevronRight size={12} className="opacity-0 group-hover:opacity-100" />
+                      <span className="text-[9px] font-mono opacity-40 group-hover:opacity-60">{sku.newSku}</span>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -887,30 +1174,500 @@ function renderValue(val: any, col: Column) {
 
 function AppContent() {
   const { token, selectedBoardId, loading, activeView } = useMonday();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   if (!token) {
     return <TokenEntry />;
   }
 
   return (
-    <div className="flex h-screen bg-[#E4E3E0] font-sans text-[#141414] print:block print:h-auto">
-      <Sidebar />
-      {!selectedBoardId ? (
-        <div className="flex-1 bg-white flex flex-col items-center justify-center p-12 text-center relative overflow-hidden">
-          <div className="w-24 h-24 border-4 border-[#141414] flex items-center justify-center mb-8 mx-auto shadow-[12px_12px_0px_0px_rgba(0,0,0,0.05)]">
-            <Layout size={40} className="opacity-20" />
+    <div className="flex h-screen bg-[#E4E3E0] font-sans text-[#141414] print:block print:h-auto overflow-hidden">
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        {/* Mobile Header */}
+        <header className="lg:hidden bg-[#141414] text-white p-4 flex items-center justify-between sticky top-0 z-50">
+          <button onClick={() => setSidebarOpen(true)} className="p-2 hover:bg-white/10 rounded transition-colors">
+            <Menu size={20} />
+          </button>
+          <span className="font-black uppercase tracking-[0.2em] text-[10px]">GRN System</span>
+          <div className="w-8 h-8" /> {/* Spacer */}
+        </header>
+
+        {!selectedBoardId ? (
+          <div className="flex-1 bg-white flex flex-col items-center justify-center p-8 lg:p-12 text-center relative overflow-hidden">
+            <div className="w-20 h-20 lg:w-24 lg:h-24 border-4 border-[#141414] flex items-center justify-center mb-8 mx-auto shadow-[12px_12px_0px_0px_rgba(0,0,0,0.05)]">
+              <Layout size={32} className="opacity-20 lg:size-[40]" />
+            </div>
+            <h2 className="font-serif italic text-2xl lg:text-3xl mb-4">QC System Standby</h2>
+            <p className="text-[9px] lg:text-sm font-mono uppercase tracking-[0.2em] opacity-40 max-w-xs leading-relaxed">
+              Please select a target repository from the workspace sidebar to initialize the GRN QC reporting flow.
+            </p>
           </div>
-          <h2 className="font-serif italic text-3xl mb-4">QC System Standby</h2>
-          <p className="text-sm font-mono uppercase tracking-[0.2em] opacity-40 max-w-xs leading-relaxed">
-            Please select a target repository from the workspace sidebar to initialize the GRN QC reporting flow.
-          </p>
-        </div>
-      ) : (
-        activeView === 'builder' ? <QCReportView /> : <BoardLiveMonitor />
-      )}
+        ) : (
+          <div className="flex-1 overflow-hidden">
+            {activeView === 'builder' ? (
+              <QCReportView />
+            ) : activeView === 'monitor' ? (
+              <BoardLiveMonitor />
+            ) : (
+              <Dashboard />
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
+
+function Dashboard() {
+  const { boardData, token, selectedBoardId } = useMonday();
+  const [analyticsData, setAnalyticsData] = useState<QCReport[]>([]);
+  const [isDataLoading, setIsDataLoading] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedQc, setSelectedQc] = useState<QCReport | null>(null);
+
+  const fetchDetailedData = async () => {
+    if (!token || !selectedBoardId) return;
+    setIsDataLoading(true);
+    try {
+      const response = await fetch('/api/monday/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+        body: JSON.stringify({
+          query: `
+            query {
+              boards (ids: [${selectedBoardId}]) {
+                items_page (limit: 500) {
+                  items {
+                    id
+                    name
+                    updates (limit: 1) {
+                      body
+                    }
+                  }
+                }
+              }
+            }
+          `
+        })
+      });
+      const result = await response.json();
+      const items = result.data.boards[0]?.items_page?.items || [];
+      
+      const parsedReports: QCReport[] = items.map((item: any) => {
+        const updateBody = item.updates[0]?.body || '';
+        const rows: QCRow[] = [];
+        const lines = updateBody.split('\n');
+        
+        const qcNoMatch = updateBody.match(/\*\*QC NO:\*\*\s*(QC-\d+)/);
+        const partyMatch = updateBody.match(/\*\*PARTY:\*\*\s*([^\n|]+)/);
+        const stateMatch = updateBody.match(/\*\*STATE:\*\*\s*([^\n|]+)/);
+        const dateMatch = updateBody.match(/\*\*DATE:\*\*\s*(\d{4}-\d{2}-\d{2})/);
+        const boxMatch = updateBody.match(/\*\*BOX QTY:\*\*\s*(\d+)/);
+        const lrMatch = updateBody.match(/\*\*LR NO:\*\*\s*([^\n|]+)/);
+
+        lines.forEach((line: string) => {
+          const parts = line.split('|').map(s => s.trim());
+          if (parts.length >= 13 && parts[1] !== 'OLD SKU' && !parts[1].includes('---')) {
+            rows.push({
+              oldSku: parts[1],
+              newSku: parts[2],
+              billQtyUnit: parseFloat(parts[3]) || 0,
+              receivedUnit: parseFloat(parts[4]) || 0,
+              expiredUnit: parseFloat(parts[5]) || 0,
+              notReceivedUnit: parseFloat(parts[6]) || 0,
+              damagesRepairable: parseFloat(parts[7]) || 0,
+              rejectNonRepairable: parseFloat(parts[8]) || 0,
+              use: parts[9],
+              batchCode: parts[10],
+              mfgDate: parts[11],
+              expDate: parts[12]
+            });
+          }
+        });
+
+        return {
+          qcNo: qcNoMatch?.[1]?.trim() || item.name || 'Unknown',
+          partyName: partyMatch?.[1]?.trim() || 'Unknown',
+          state: stateMatch?.[1]?.trim() || 'Unknown',
+          date: dateMatch?.[1] || '',
+          rows,
+          approvedBy: '',
+          lrNo: lrMatch?.[1]?.trim() || '',
+          boxQty: boxMatch?.[1] || ''
+        };
+      }).filter((r: QCReport) => r.rows.length > 0);
+
+      setAnalyticsData(parsedReports);
+      setLastSyncTime(new Date());
+    } catch (err) {
+      console.error("Dashboard Fetch Error:", err);
+    } finally {
+      setIsDataLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDetailedData();
+  }, [selectedBoardId]);
+
+  const istNow = toZonedTime(new Date(), 'Asia/Kolkata');
+  
+  const filteredReports = useMemo(() => {
+    if (!searchQuery) return analyticsData;
+    return analyticsData.filter(r => 
+      r.qcNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      r.partyName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      r.state.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [analyticsData, searchQuery]);
+
+  const skuRtvStats = useMemo(() => {
+    const stats: Record<string, number> = {};
+    analyticsData.forEach(report => {
+      report.rows.forEach(row => {
+        if (!stats[row.newSku]) stats[row.newSku] = 0;
+        stats[row.newSku] += (row.notReceivedUnit + row.rejectNonRepairable + row.expiredUnit);
+      });
+    });
+    return Object.entries(stats)
+      .map(([sku, value]) => ({ name: sku, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10);
+  }, [analyticsData]);
+
+  const partyLocationStats = useMemo(() => {
+    const stats: Record<string, number> = {};
+    analyticsData.forEach(report => {
+      const key = `${report.partyName} (${report.state})`;
+      const rtv = report.rows.reduce((acc, row) => acc + row.notReceivedUnit + row.rejectNonRepairable + row.expiredUnit, 0);
+      stats[key] = (stats[key] || 0) + rtv;
+    });
+    return Object.entries(stats)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+  }, [analyticsData]);
+
+  const expiredSkus = useMemo(() => {
+    const expired: any[] = [];
+    analyticsData.forEach(report => {
+      report.rows.forEach(row => {
+        if (row.expDate) {
+          try {
+            let expD: Date | null = null;
+            if (row.expDate.includes('/')) {
+              const parts = row.expDate.split('/');
+              if (parts.length === 2) {
+                expD = parse(row.expDate, 'MM/yy', new Date());
+              } else if (parts.length === 3) {
+                expD = parse(row.expDate, 'dd/MM/yy', new Date());
+              }
+            }
+            
+            if (expD && isValid(expD) && isBefore(expD, istNow)) {
+              expired.push({
+                sku: row.newSku,
+                party: report.partyName,
+                expDate: row.expDate,
+                qcNo: report.qcNo
+              });
+            }
+          } catch (e) {}
+        }
+      });
+    });
+    return expired;
+  }, [analyticsData, istNow]);
+
+  if (selectedQc) {
+    return (
+      <div className="flex-1 bg-white h-full overflow-y-auto custom-scrollbar p-6 lg:p-10 font-sans">
+        <div className="max-w-6xl mx-auto">
+          <button 
+            onClick={() => setSelectedQc(null)}
+            className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest mb-8 hover:translate-x-[-4px] transition-all"
+          >
+            <ArrowLeft size={16} /> Back to Insights
+          </button>
+
+          <div className="bg-white border-4 border-[#141414] p-8 shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-10 border-b-2 border-[#141414] pb-6">
+              <div className="space-y-4">
+                <div className="inline-block bg-[#141414] text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest italic animate-pulse">
+                  Detailed Audit Log
+                </div>
+                <div>
+                  <h1 className="text-4xl font-black uppercase tracking-tighter leading-none">{selectedQc.qcNo}</h1>
+                  <p className="text-xl font-medium opacity-60">Audit performed on {selectedQc.date}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-8 text-[10px] items-center">
+                <div className="space-y-1">
+                  <p className="font-black uppercase tracking-wider opacity-40">Party Name</p>
+                  <p className="font-bold text-sm uppercase">{selectedQc.partyName}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="font-black uppercase tracking-wider opacity-40">State/Location</p>
+                  <p className="font-bold text-sm uppercase">{selectedQc.state}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="font-black uppercase tracking-wider opacity-40">LR Number</p>
+                  <p className="font-bold text-sm uppercase">{selectedQc.lrNo || 'N/A'}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="font-black uppercase tracking-wider opacity-40">Box Quantity</p>
+                  <p className="font-bold text-sm uppercase">{selectedQc.boxQty || '0'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[10px] border-collapse">
+                <thead>
+                  <tr className="bg-[#141414] text-white uppercase tracking-widest">
+                    <th className="p-4 font-black">SKU Detail</th>
+                    <th className="p-4 font-black text-center">Bill</th>
+                    <th className="p-4 font-black text-center">Recv</th>
+                    <th className="p-4 font-black text-center text-orange-400">Exp</th>
+                    <th className="p-4 font-black text-center text-red-400">RTV</th>
+                    <th className="p-4 font-black text-center">Batch</th>
+                    <th className="p-4 font-black text-center">Use</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedQc.rows.map((row, i) => (
+                    <tr key={i} className="border-b-2 border-[#141414]/10 hover:bg-gray-50 transition-colors">
+                      <td className="p-4">
+                        <div className="font-black text-xs">{row.newSku}</div>
+                        <div className="text-[8px] opacity-40 font-mono">{row.oldSku}</div>
+                      </td>
+                      <td className="p-4 text-center font-bold">{row.billQtyUnit}</td>
+                      <td className="p-4 text-center font-bold text-green-600">{row.receivedUnit}</td>
+                      <td className="p-4 text-center font-bold text-orange-600">{row.expiredUnit}</td>
+                      <td className="p-4 text-center font-bold text-red-600">{row.notReceivedUnit + row.rejectNonRepairable}</td>
+                      <td className="p-4 text-center font-mono">
+                         <div className="opacity-80">{row.batchCode}</div>
+                         <div className="text-[8px] opacity-40">E: {row.expDate}</div>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className={`px-2 py-0.5 text-[8px] font-black uppercase tracking-widest ${row.use === 'FRESH' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                          {row.use}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 bg-white h-full overflow-y-auto custom-scrollbar p-6 lg:p-10 font-sans relative">
+       <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
+        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6 border-b-4 border-[#141414] pb-8">
+          <div className="space-y-1">
+            <div className="flex items-center gap-3 mb-2">
+              <h1 className="text-4xl font-black uppercase tracking-tighter">QC Intelligence</h1>
+              <div className="bg-red-600 text-white text-[8px] font-black px-2 py-1 uppercase tracking-widest animate-pulse">Alpha v2</div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-bold bg-[#141414] text-white px-2 py-0.5 uppercase tracking-widest italic">GRN Audit Systems</span>
+              <span className="text-[10px] font-mono opacity-40">Location: Mumbai, India (IST) | Time: {format(istNow, 'HH:mm')}</span>
+            </div>
+          </div>
+
+          <div className="flex-1 max-w-md w-full relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={16} />
+            <input 
+              type="text"
+              placeholder="Search QC No, Party, or State..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full bg-[#141414]/5 border-2 border-[#141414] p-4 pl-12 text-xs font-bold uppercase tracking-widest focus:outline-none focus:bg-white transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+            />
+            {searchQuery && (
+              <div className="absolute top-full left-0 right-0 bg-white border-2 border-[#141414] mt-2 z-50 max-h-[300px] overflow-y-auto shadow-2xl custom-scrollbar border-t-0">
+                {filteredReports.map(r => (
+                  <button 
+                    key={r.qcNo}
+                    onClick={() => { setSelectedQc(r); setSearchQuery(''); }}
+                    className="w-full text-left p-4 hover:bg-gray-50 border-b border-[#141414]/10 last:border-0 flex justify-between items-center group"
+                  >
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-wider group-hover:text-red-600 transition-colors">{r.qcNo}</div>
+                      <div className="text-[8px] opacity-40 uppercase font-medium">{r.partyName} | {r.state}</div>
+                    </div>
+                    <ArrowLeft className="rotate-180 opacity-0 group-hover:opacity-100 transition-all" size={14} />
+                  </button>
+                ))}
+                {filteredReports.length === 0 && (
+                  <div className="p-6 text-center text-[10px] opacity-30 italic uppercase">No Audit Found</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <button 
+            onClick={fetchDetailedData}
+            disabled={isDataLoading}
+            className="flex-shrink-0 bg-white border-4 border-[#141414] px-6 py-4 text-[10px] font-black uppercase tracking-widest flex items-center gap-3 hover:bg-gray-50 transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={isDataLoading ? 'animate-spin' : ''} /> Synchronize Audit Data
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-white border-4 border-[#141414] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] group hover:-translate-y-1 transition-transform">
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#141414]/40 mb-1">Total QC Audits</p>
+            <p className="text-5xl font-black tracking-tighter group-hover:text-red-600 transition-colors">{analyticsData.length}</p>
+          </div>
+          <div className="bg-white border-4 border-[#141414] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] group hover:-translate-y-1 transition-transform">
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#141414]/40 mb-1">RTV Potential (Units)</p>
+            <p className="text-5xl font-black tracking-tighter text-red-600">
+              {analyticsData.reduce((acc, r) => acc + r.rows.reduce((ra, row) => ra + row.notReceivedUnit + row.rejectNonRepairable + row.expiredUnit, 0), 0)}
+            </p>
+          </div>
+          <div className="bg-white border-4 border-[#141414] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] group hover:-translate-y-1 transition-transform">
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#141414]/40 mb-1">Critical Expiry Count</p>
+            <p className="text-5xl font-black tracking-tighter text-orange-600">{expiredSkus.length}</p>
+          </div>
+          <div className="bg-[#141414] border-4 border-[#141414] p-6 shadow-[8px_8px_0px_0px_rgba(31,31,31,0.5)]">
+            <p className="text-[10px] font-black uppercase tracking-widest text-white/40 mb-1">Current Repository</p>
+            <p className="text-lg font-black text-white truncate leading-tight uppercase tracking-tighter">{boardData?.name || 'Monday'}</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+          <div className="bg-white border-4 border-[#141414] p-8 shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
+            <div className="flex items-center justify-between mb-8 border-b-2 border-[#141414] pb-4">
+              <h3 className="text-sm font-black uppercase tracking-widest">Worst Performing SKUs</h3>
+              <span className="text-[8px] font-mono opacity-40 uppercase tracking-widest">Unit Sum (RTV + Exp)</span>
+            </div>
+            <div className="h-[350px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={skuRtvStats} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
+                  <XAxis type="number" hide />
+                  <YAxis dataKey="name" type="category" width={120} fontSize={8} fontWeight="900" tick={{ fill: '#141414' }} />
+                  <Tooltip 
+                    cursor={{ fill: 'rgba(0,0,0,0.05)' }} 
+                    contentStyle={{ border: '4px solid #141414', borderRadius: '0px', padding: '12px' }}
+                    itemStyle={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase' }}
+                  />
+                  <Bar dataKey="value" fill="#141414" barSize={20}>
+                    {skuRtvStats.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={index < 3 ? '#dc2626' : '#141414'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="bg-white border-4 border-[#141414] p-8 shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
+            <div className="flex items-center justify-between mb-8 border-b-2 border-[#141414] pb-4">
+              <h3 className="text-sm font-black uppercase tracking-widest">Party RETURN Heatmap</h3>
+              <span className="text-[8px] font-mono opacity-40 uppercase tracking-widest">Top Return Origins</span>
+            </div>
+            <div className="h-[350px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={partyLocationStats}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="name" fontSize={7} angle={-30} textAnchor="end" height={80} fontWeight="bold" />
+                  <YAxis fontSize={9} fontWeight="bold" />
+                  <Tooltip contentStyle={{ border: '4px solid #141414', borderRadius: '0px' }} />
+                  <Bar dataKey="value" fill="#141414">
+                    {partyLocationStats.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={['#141414', '#444444', '#777777', '#aaaaaa'][index % 4]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-[#141414] p-8 border-4 border-[#141414] shadow-[12px_12px_0px_0px_rgba(0,0,0,0.5)]">
+           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-10">
+              <h3 className="text-xl font-black uppercase tracking-tight text-white flex items-center gap-3">
+                <AlertCircle className="text-red-600 animate-pulse" size={24} /> 
+                System Critical Alerts
+              </h3>
+              <div className="flex items-center gap-4 text-[10px] font-black uppercase tracking-widest">
+                <div className="flex items-center gap-2 text-orange-500">
+                  <div className="w-2 h-2 bg-orange-500 rounded-full" /> HIGH EXPIRY RISK
+                </div>
+                <div className="flex items-center gap-2 text-red-500">
+                  <div className="w-2 h-2 bg-red-500 rounded-full" /> IMMEDIATE RTV
+                </div>
+              </div>
+           </div>
+
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <div className="bg-white p-6 space-y-4 shadow-[6px_6px_0px_0px_rgba(255,255,255,0.1)]">
+                <h4 className="text-[10px] font-black uppercase tracking-widest border-b border-[#141414]/10 pb-2 flex justify-between">
+                  <span>Expiry Violations</span>
+                  <span className="text-red-600">{expiredSkus.length}</span>
+                </h4>
+                <div className="space-y-3 max-h-[250px] overflow-y-auto custom-scrollbar pr-2">
+                  {expiredSkus.map((item, i) => (
+                    <div key={i} className="border-l-4 border-orange-500 pl-3 py-1 bg-orange-50">
+                      <div className="text-[10px] font-black truncate">{item.sku}</div>
+                      <div className="text-[8px] opacity-40 uppercase font-medium">{item.party} • Exp: {item.expDate}</div>
+                    </div>
+                  ))}
+                  {expiredSkus.length === 0 && <p className="text-[9px] opacity-20 italic">No violations detected</p>}
+                </div>
+              </div>
+
+              <div className="md:col-span-2 bg-white p-6 shadow-[6px_6px_0px_0px_rgba(255,255,255,0.1)]">
+                 <h4 className="text-[10px] font-black uppercase tracking-widest border-b border-[#141414]/10 pb-2 mb-4">Recursive Return Logic (SKU Origins)</h4>
+                 <div className="overflow-x-auto">
+                    <table className="w-full text-left text-[9px]">
+                      <thead>
+                        <tr className="opacity-40 uppercase font-black tracking-widest border-b border-[#141414]/5">
+                          <th className="py-2">Problem SKU</th>
+                          <th className="py-2">Major Origin</th>
+                          <th className="py-2">State</th>
+                          <th className="py-2 text-right">RTV Count</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#141414]/5">
+                        {skuRtvStats.slice(0, 5).map((skuStat, i) => {
+                          const worstPartyForSku = analyticsData.reduce((acc: any, report) => {
+                            const skuRtv = report.rows
+                              .filter(r => r.newSku === skuStat.name)
+                              .reduce((ra, row) => ra + row.notReceivedUnit + row.rejectNonRepairable + row.expiredUnit, 0);
+                            if (skuRtv > acc.count) return { name: report.partyName, state: report.state, count: skuRtv };
+                            return acc;
+                          }, { name: 'Multiple', state: '-', count: 0 });
+
+                          return (
+                            <tr key={i}>
+                              <td className="py-3 font-black text-[#141414]">{skuStat.name}</td>
+                              <td className="py-3 font-medium uppercase">{worstPartyForSku.name}</td>
+                              <td className="py-3 font-medium uppercase opacity-50">{worstPartyForSku.state}</td>
+                              <td className="py-3 font-black text-red-600 text-right">{skuStat.value}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                 </div>
+              </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function BoardLiveMonitor() {
   const { selectedBoardId, boardData, customEmbedUrls, setCustomEmbedUrl } = useMonday();
