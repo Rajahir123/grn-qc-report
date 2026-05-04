@@ -99,6 +99,15 @@ async function startServer() {
         });
       }
 
+      if (status === 401 || status === 403) {
+        return res.status(status).json({
+          error: `Monday Authentication Error (${status}): ${errorData?.error_message || "Invalid or insufficient API token permissions."}`,
+          status,
+          details: "If you are an admin, ensure you use the Personal Token from Administration > API. If you are a member, ensure you have access to the board.",
+          raw: errorData
+        });
+      }
+
       res.status(status).json(errorData || { error: "Failed to connect to Monday.com" });
     }
   });

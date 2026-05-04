@@ -112,7 +112,7 @@ interface MondayContextType {
   selectedBoardId: string | null;
   setSelectedBoardId: (id: string | null) => void;
   boardData: Board | null;
-  fetchBoardDetails: (id: string) => Promise<void>;
+  fetchBoardDetails: (id: string, customToken?: string) => Promise<any>;
   submitReport: (report: QCReport) => Promise<void>;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncError: string | null;
@@ -121,11 +121,6 @@ interface MondayContextType {
   customEmbedUrls: Record<string, string>;
   setCustomEmbedUrl: (boardId: string, url: string) => void;
   logout: () => void;
-  gsheetUrl: string | null;
-  setGsheetUrl: (url: string | null) => void;
-  exportToGSheet: (report: QCReport) => Promise<void>;
-  exportStatus: 'idle' | 'loading' | 'success' | 'error';
-  exportError: string | null;
 }
 
 const MondayContext = createContext<MondayContextType | undefined>(undefined);
@@ -154,7 +149,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (token) {
       localStorage.setItem('monday_token', token);
-      fetchBoards();
+      fetchBoards().catch(console.error);
     } else {
       localStorage.removeItem('monday_token');
       localStorage.removeItem('selected_board_id');
@@ -164,10 +159,11 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   }, [token]);
 
   useEffect(() => {
-    if (selectedBoardId) {
+    if (selectedBoardId && token) {
       localStorage.setItem('selected_board_id', selectedBoardId);
+      fetchBoardDetails(selectedBoardId).catch(console.error);
     }
-  }, [selectedBoardId]);
+  }, [selectedBoardId, token]);
 
   const fetchBoards = async () => {
     if (!token) return;
@@ -178,12 +174,12 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
         body: JSON.stringify({
-          query: '{ boards (limit: 200) { id name description } }'
+          query: '{ boards (limit: 500) { id name description } }'
         })
       });
       const data = await response.json();
       if (data.errors) throw new Error(data.errors[0].message);
-      setBoards(data.data.boards);
+      setBoards(data.data.boards || []);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -191,14 +187,15 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const fetchBoardDetails = async (id: string) => {
-    if (!token) return;
+  const fetchBoardDetails = async (id: string, customToken?: string) => {
+    const activeToken = customToken || token;
+    if (!activeToken) return;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+        headers: { 'Content-Type': 'application/json', 'x-monday-token': activeToken },
         body: JSON.stringify({
           query: `
             query {
@@ -226,9 +223,14 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await response.json();
       if (data.errors) throw new Error(data.errors[0].message);
+      if (!data.data.boards || data.data.boards.length === 0) {
+        throw new Error("The board does not exist or you don't have access to it.");
+      }
       setBoardData(data.data.boards[0]);
+      return data.data.boards[0];
     } catch (err: any) {
       setError(err.message);
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -237,68 +239,15 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'builder' | 'monitor' | 'dashboard'>('builder');
-  const [gsheetUrl, setGsheetUrl] = useState<string | null>(localStorage.getItem('gsheet_webhook_url'));
-  const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [exportError, setExportError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (gsheetUrl) {
-      localStorage.setItem('gsheet_webhook_url', gsheetUrl);
-    } else {
-      localStorage.removeItem('gsheet_webhook_url');
-    }
-  }, [gsheetUrl]);
 
   const logout = () => {
     setToken(null);
     setSelectedBoardId(null);
     setBoardData(null);
-    setGsheetUrl(null);
     localStorage.removeItem('monday_token');
     localStorage.removeItem('selected_board_id');
     localStorage.removeItem('custom_embed_urls');
-    localStorage.removeItem('gsheet_webhook_url');
     setActiveView('builder');
-  };
-
-  const exportToGSheet = async (report: QCReport) => {
-    if (!gsheetUrl) return;
-    setExportStatus('loading');
-    try {
-      const response = await fetch('/api/export/gsheet', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: gsheetUrl,
-          data: {
-            qcNo: report.qcNo,
-            lrNo: report.lrNo,
-            date: report.date,
-            boxQty: report.boxQty,
-            partyName: report.partyName,
-            state: report.state,
-            approvedBy: report.approvedBy,
-            rows: report.rows
-          }
-        })
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || 'Export failed');
-      }
-
-      setExportStatus('success');
-      setExportError(null);
-      setTimeout(() => setExportStatus('idle'), 3000);
-    } catch (err: any) {
-      console.error('Export Error:', err.message);
-      setExportStatus('error');
-      setExportError(err.message);
-      setTimeout(() => setExportStatus('idle'), 5000);
-      setTimeout(() => setExportError(null), 8000);
-    }
   };
 
   const submitReport = async (report: QCReport) => {
@@ -306,7 +255,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     setSyncStatus('syncing');
     setSyncError(null);
     try {
-      const itemName = `QC Report: ${report.qcNo} - ${report.partyName}`;
+      const itemName = `${report.qcNo} | ${report.partyName} | ${report.state}`;
       const creationResponse = await fetch('/api/monday/proxy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
@@ -409,12 +358,7 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
       setActiveView,
       customEmbedUrls,
       setCustomEmbedUrl: (boardId, url) => setCustomEmbedUrls(prev => ({ ...prev, [boardId]: url })),
-      logout,
-      gsheetUrl,
-      setGsheetUrl,
-      exportToGSheet,
-      exportStatus,
-      exportError
+      logout
     }}>
       {children}
     </MondayContext.Provider>
@@ -429,134 +373,124 @@ function useMonday() {
 
 // --- Components ---
 
-function TokenEntry() {
-  const [inputToken, setInputToken] = useState('');
-  const { setToken, loading, error } = useMonday();
+function MondaySetup() {
+  const [inputToken, setInputToken] = useState(localStorage.getItem('monday_token') || '');
+  const [inputBoardId, setInputBoardId] = useState(localStorage.getItem('selected_board_id') || '');
+  const { setToken, setSelectedBoardId, fetchBoardDetails, loading: contextLoading, error } = useMonday();
+  const [localLoading, setLocalLoading] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputToken.trim()) setToken(inputToken.trim());
+    const token = inputToken.trim();
+    let bId = inputBoardId.trim();
+    
+    if (token && bId) {
+      const urlMatch = bId.match(/boards\/(\d+)/);
+      if (urlMatch) bId = urlMatch[1];
+      
+      setLocalLoading(true);
+      setLocalError(null);
+      
+      try {
+        // Tentatively verify the board exists with this token
+        await fetchBoardDetails(bId, token);
+        
+        // If successful, commit to state
+        setToken(token);
+        setSelectedBoardId(bId);
+      } catch (err: any) {
+        setLocalError(err.message || "Could not verify board. Please check your token and ID.");
+      } finally {
+        setLocalLoading(false);
+      }
+    }
   };
+
+  const displayError = localError || error;
+  const isLoading = localLoading || contextLoading;
 
   return (
     <div className="min-h-screen bg-[#E4E3E0] flex items-center justify-center p-6 font-sans">
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md bg-white border border-[#141414] p-8 shadow-[8px_8px_0px_0px_rgba(20,20,20,1)]"
+        className="w-full max-w-md bg-white border-2 border-[#141414] p-8 shadow-[12px_12px_0px_0px_rgba(20,20,20,1)]"
       >
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 bg-[#141414] flex items-center justify-center">
-            <Trello className="text-white w-6 h-6" />
+          <div className="w-12 h-12 bg-[#141414] flex items-center justify-center">
+            <Database className="text-white w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-xl font-bold uppercase tracking-tight">Monday Connect</h1>
-            <p className="text-xs font-mono opacity-50 uppercase italic">v1.1.0 — System Init</p>
+            <h1 className="text-2xl font-black uppercase tracking-tighter">QC Portal Link</h1>
+            <p className="text-[10px] font-bold opacity-40 uppercase italic tracking-widest">Monday.com &times; Direct Access</p>
           </div>
         </div>
 
-        <div className="mb-8 p-4 bg-[#F9F9F8] border-l-4 border-[#141414] space-y-2">
-          <h3 className="text-[10px] font-bold uppercase tracking-widest">Configuration Guide</h3>
-          <p className="text-xs leading-relaxed text-gray-600">
-            To connect, you need your **Personal API Token**. Go to your Monday.com avatar → <span className="font-bold">Developers</span> → <span className="font-bold">My Tokens</span> to copy it.
+        <div className="mb-8 p-4 bg-red-600 text-white space-y-2 shadow-[4px_4px_0px_0px_rgba(153,27,27,1)]">
+          <h3 className="text-[10px] font-black uppercase tracking-widest">Admin Authorization</h3>
+          <p className="text-[10px] leading-relaxed font-medium opacity-90">
+            Authentication requires a **Personal API Token v2**. Ensure your token has permission to write updates and items.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="space-y-2">
-            <label className="font-serif italic text-xs uppercase opacity-60 tracking-wider">Authentication Token</label>
-            <div className="relative">
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Admin API Key</label>
               <input 
                 type="password"
                 value={inputToken}
                 onChange={(e) => setInputToken(e.target.value)}
-                placeholder="Paste v2 token here..."
-                className="w-full bg-[#f5f5f5] border border-[#141414] p-3 font-mono text-sm focus:outline-none focus:bg-white transition-colors pr-10"
+                placeholder="Paste API v2 token..."
+                className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-sm focus:outline-none focus:bg-white transition-all"
                 required
               />
-              <Trello className="absolute right-3 top-1/2 -translate-y-1/2 opacity-20" size={16} />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Target Board ID</label>
+              <input 
+                type="text"
+                value={inputBoardId}
+                onChange={(e) => setInputBoardId(e.target.value)}
+                placeholder="Enter Numeric Board ID or URL..."
+                className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-sm focus:outline-none focus:bg-white transition-all uppercase"
+                required
+              />
             </div>
           </div>
 
-          <div className="p-4 bg-gray-50 border border-dotted border-[#141414]/20 space-y-2">
-            <span className="text-[9px] font-black uppercase block tracking-widest text-[#141414]">How to get your token:</span>
-            <div className="text-[9px] font-mono leading-relaxed opacity-60">
-              1. Monday.com &rarr; Profile (Top Right)<br/>
-              2. Administration &rarr; API &rarr; Copy Personal Token
-            </div>
+          <div className="p-4 bg-gray-50 border border-dotted border-[#141414]/40 space-y-3">
+             <div className="flex items-start gap-2">
+                <div className="w-4 h-4 bg-green-500 flex-shrink-0 mt-0.5" />
+                <p className="text-[9px] font-bold leading-tight opacity-70">
+                  <span className="text-[#141414]">TOKEN:</span> Profile &rarr; Admin &rarr; API &rarr; Copy Personal Token
+                </p>
+             </div>
+             <div className="flex items-start gap-2">
+                <div className="w-4 h-4 bg-blue-500 flex-shrink-0 mt-0.5" />
+                <p className="text-[9px] font-bold leading-tight opacity-70">
+                  <span className="text-[#141414]">BOARD:</span> Open your board and copy the number in the URL
+                </p>
+             </div>
           </div>
 
-          {error && (
-            <div className="p-3 bg-red-50 border border-red-500 text-red-600 text-xs font-mono flex items-center gap-2">
-              <AlertCircle size={14} />
-              {error}
+          {displayError && (
+            <div className="p-4 bg-red-50 border-2 border-red-600 text-red-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-3">
+              <AlertCircle size={16} />
+              <span className="flex-1">{displayError}</span>
             </div>
           )}
 
           <button 
             type="submit"
-            disabled={loading}
-            className="w-full bg-[#141414] text-white py-3 font-bold uppercase tracking-widest text-sm hover:invert transition-all disabled:opacity-50"
+            disabled={isLoading}
+            className="w-full bg-[#141414] text-white py-4 font-black uppercase tracking-widest text-xs hover:invert transition-all shadow-[6px_6px_0px_0px_rgba(31,31,31,0.4)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50"
           >
-            {loading ? 'Validating...' : 'Initialize Connection'}
+            {isLoading ? 'Verifying Credentials...' : 'Establish System Link'}
           </button>
         </form>
-      </motion.div>
-    </div>
-  );
-}
-
-function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-  const { token, setToken } = useMonday();
-  const [newToken, setNewToken] = useState(token || '');
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#141414]/80 backdrop-blur-sm p-4">
-      <motion.div 
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="bg-white border border-[#141414] w-full max-w-lg overflow-hidden shadow-[12px_12px_0px_0px_rgba(0,0,0,0.5)]"
-      >
-        <div className="p-6 border-b border-[#141414] flex justify-between items-center bg-[#F9F9F8]">
-          <h2 className="font-serif italic text-xl">Connection Settings</h2>
-          <button onClick={onClose} className="p-1 hover:bg-[#141414]/10 transition-colors">
-            <Plus size={20} className="rotate-45" />
-          </button>
-        </div>
-        
-        <div className="p-8 space-y-6">
-          <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase tracking-widest block">Update API Token</label>
-            <p className="text-xs text-gray-500 mb-4">Enter a new monday.com API token to change the connected account.</p>
-            <input 
-              type="password"
-              value={newToken}
-              onChange={(e) => setNewToken(e.target.value)}
-              className="w-full bg-[#f5f5f5] border border-[#141414] p-3 font-mono text-sm focus:outline-none"
-              placeholder="Paste new token..."
-            />
-          </div>
-
-          <div className="flex gap-4">
-            <button 
-              onClick={() => {
-                setToken(newToken);
-                onClose();
-              }}
-              className="flex-1 bg-[#141414] text-white py-3 font-bold uppercase tracking-widest text-xs hover:invert transition-all"
-            >
-              Save Changes
-            </button>
-            <button 
-              onClick={onClose}
-              className="flex-1 border border-[#141414] py-3 font-bold uppercase tracking-widest text-xs hover:bg-[#141414] hover:text-white transition-all"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
       </motion.div>
     </div>
   );
@@ -572,7 +506,12 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
   const handleManualConnect = (e: React.FormEvent) => {
     e.preventDefault();
     if (manualId.trim()) {
-      setSelectedBoardId(manualId.trim());
+      let id = manualId.trim();
+      // Extract numeric ID from board URL if pasted
+      const urlMatch = id.match(/boards\/(\d+)/);
+      if (urlMatch) id = urlMatch[1];
+      
+      setSelectedBoardId(id);
       setManualId('');
       setActiveView('builder');
       onClose();
@@ -703,9 +642,22 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
               <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/60">
                 {selectedBoardId ? 'Connected' : 'Disconnected'}
               </p>
-              <p className="text-[10px] font-mono truncate text-[#141414]/40">
-                {selectedBoardId ? `Session: ${selectedBoardId}` : 'Select a board'}
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-mono truncate text-[#141414]/40">
+                  {selectedBoardId ? `ID: ${selectedBoardId}` : 'Select a board'}
+                </p>
+                {selectedBoardId && (
+                  <a 
+                    href={`https://monday.com/boards/${selectedBoardId}`} 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="text-[#141414] hover:text-red-600"
+                    title="Open Board in Monday"
+                  >
+                    <ExternalLink size={10} />
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -715,7 +667,7 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
 }
 
 function QCReportView() {
-  const { submitReport, syncStatus, syncError, boardData, gsheetUrl, setGsheetUrl, exportToGSheet, exportStatus, exportError } = useMonday();
+  const { submitReport, syncStatus, syncError, boardData, logout, error } = useMonday();
   const [report, setReport] = useState<QCReport>({
     qcNo: 'QC-' + Math.floor(1000 + Math.random() * 9000),
     lrNo: '',
@@ -728,7 +680,6 @@ function QCReportView() {
   });
 
   const [isSkuPickerOpen, setIsSkuPickerOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const addSku = (skuMapping: SKUMapping) => {
     setReport({
@@ -802,166 +753,39 @@ function QCReportView() {
           >
             <Save size={12} /> 
             {syncStatus === 'syncing' ? 'Syncing...' : 
-             syncStatus === 'success' ? 'Synced!' : 
-             syncStatus === 'error' ? 'Retry' : 'Sync'}
+             syncStatus === 'success' ? 'Synced to Monday' : 
+             syncStatus === 'error' ? 'Retry Sync' : 'Sync to Monday'}
           </button>
           
           <button 
-            onClick={() => exportToGSheet(report)}
-            disabled={exportStatus === 'loading' || !gsheetUrl || report.rows.length === 0}
-            className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 font-bold uppercase tracking-widest text-[9px] lg:text-[10px] border border-[#141414] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50 ${
-              exportStatus === 'success' ? 'bg-green-100 text-green-800' :
-              exportStatus === 'error' ? 'bg-red-100 text-red-800' :
-              'bg-white hover:bg-gray-50'
-            }`}
-            title={!gsheetUrl ? "Set G-Sheet URL in settings to enable" : "Export to Google Sheets"}
+            onClick={logout}
+            className="flex items-center justify-center p-2 bg-gray-100 border border-[#141414] hover:bg-gray-200 transition-all text-red-600"
+            title="Reset Connection"
           >
-            <Share2 size={12} /> 
-            {exportStatus === 'loading' ? 'Exporting...' : 
-             exportStatus === 'success' ? 'Exported!' : 
-             exportStatus === 'error' ? 'Failed' : 'Export Data'}
-          </button>
-
-          <button 
-            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-            className="flex items-center justify-center p-2 bg-gray-100 border border-[#141414] hover:bg-gray-200 transition-all"
-          >
-            <Settings size={16} />
+            <LogOut size={16} />
           </button>
         </div>
       </div>
 
-      {/* G-Sheet Settings Modal */}
-      <AnimatePresence>
-        {isSettingsOpen && (
-          <motion.div 
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="bg-[#141414] text-white p-6 lg:p-8 z-[20] border-b border-white/10 shadow-2xl"
-          >
-            <div className="max-w-6xl mx-auto">
-              <div className="flex flex-col lg:flex-row gap-8">
-                <div className="flex-1 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white/60">
-                      <Database size={14} className="text-white" /> Google Sheets Webhook URL
-                    </label>
-                    <span className="text-[9px] font-mono text-white/30 uppercase">Required for Export</span>
-                  </div>
-                  <input 
-                    type="text" 
-                    value={gsheetUrl || ''} 
-                    onChange={e => setGsheetUrl(e.target.value)}
-                    placeholder="https://script.google.com/macros/s/.../exec"
-                    className="w-full bg-white/5 border border-white/20 p-4 text-xs font-mono focus:outline-none focus:border-white/50 focus:bg-white/10 transition-all placeholder:opacity-20"
-                  />
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">
-                    <div className="bg-white/5 p-4 border border-white/10">
-                      <h4 className="text-[10px] font-black uppercase tracking-widest mb-3 flex items-center gap-2">
-                        <Check size={12} className="text-green-400" /> Setup Instructions
-                      </h4>
-                      <ol className="text-[9px] space-y-2 text-white/70 font-medium">
-                        <li>1. Open Google Sheet &gt; Extensions &gt; Apps Script</li>
-                        <li>2. Paste the script on the right into the editor</li>
-                        <li>3. Click <strong className="text-white">Deploy &gt; New Deployment</strong></li>
-                        <li>4. Select type: <strong className="text-white">Web App</strong></li>
-                        <li>5. Set <strong>"Who has access"</strong> to <strong className="text-white uppercase text-green-400 font-black">Anyone</strong></li>
-                        <li className="pt-2 text-[8px] text-orange-300 leading-tight border-t border-white/5 mt-2">
-                          <strong>Note:</strong> If "Anyone" is missing (Workspace users), use a personal <strong>@gmail.com</strong> account instead.
-                        </li>
-                      </ol>
-                    </div>
-
-                    <div className="bg-white/5 p-4 border border-white/10 relative">
-                      <h4 className="text-[10px] font-black uppercase tracking-widest mb-3">Sample Apps Script</h4>
-                      <pre className="text-[8px] font-mono text-white/40 overflow-x-auto bg-black/30 p-2 max-h-[120px] custom-scrollbar">
-{`function doPost(e) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheets()[0];
-  var data = JSON.parse(e.postData.contents);
-  var rows = data.rows || [];
-  
-  rows.forEach(function(row) {
-    sheet.appendRow([
-      data.qcNo, data.lrNo, data.date, 
-      data.partyName, data.state, 
-      row.oldSku, row.newSku, row.billQtyUnit,
-      row.receivedUnit, row.expiredUnit, row.notReceivedUnit,
-      row.use, row.mfgDate, row.expDate,
-      new Date()
-    ]);
-  });
-  
-  return ContentService.createTextOutput(
-    JSON.stringify({result: "success"})
-  ).setMimeType(ContentService.MimeType.JSON);
-}`}
-                      </pre>
-                      <button 
-                        onClick={() => {
-                          const code = `function doPost(e) {\n  var ss = SpreadsheetApp.getActiveSpreadsheet();\n  var sheet = ss.getSheets()[0];\n  var data = JSON.parse(e.postData.contents);\n  var rows = data.rows || [];\n  \n  rows.forEach(function(row) {\n    sheet.appendRow([\n      data.qcNo, data.lrNo, data.date, \n      data.partyName, data.state, \n      row.oldSku, row.newSku, row.billQtyUnit,\n      row.receivedUnit, row.expiredUnit, row.notReceivedUnit,\n      row.use, row.mfgDate, row.expDate,\n      new Date()\n    ]);\n  });\n  \n  return ContentService.createTextOutput(\n    JSON.stringify({result: "success"})\n  ).setMimeType(ContentService.MimeType.JSON);\n}`;
-                          navigator.clipboard.writeText(code);
-                        }}
-                        className="absolute top-4 right-4 text-[8px] uppercase font-bold bg-white/10 hover:bg-white/20 px-2 py-1 transition-all"
-                      >
-                        Copy Script
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="lg:w-64 flex flex-col justify-end gap-3">
-                  <div className="p-4 bg-orange-500/10 border border-orange-500/20 rounded-sm">
-                    <h5 className="text-[9px] font-black uppercase mb-1 text-orange-400">Workspace Error (401/403)</h5>
-                    <p className="text-[8px] text-orange-100/70 font-medium leading-relaxed">
-                      If you only see <strong>"Anyone with a Google Account"</strong>, your company blocks anonymous access.
-                      <br/><br/>
-                      <span className="text-white">FIX: Use a personal <strong>@gmail.com</strong> account to host the sheet.</span>
-                    </p>
-                  </div>
-                  <button 
-                    onClick={() => setIsSettingsOpen(false)}
-                    className="w-full bg-white text-[#141414] px-8 py-4 font-black uppercase text-[11px] tracking-[0.2em] hover:bg-gray-200 transition-all shadow-[6px_6px_0px_0px_rgba(255,255,255,0.2)] active:translate-x-1 active:translate-y-1 active:shadow-none"
-                  >
-                    Save & Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {syncError && (
-        <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-between animate-pulse">
+        <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-black uppercase tracking-widest flex items-center justify-between animate-pulse">
           <div className="flex items-center gap-2">
             <AlertCircle size={14} />
             <span>Sync Failed: {syncError}</span>
           </div>
-          <button onClick={() => submitReport(report)} className="underline hover:no-underline">Try Again Now</button>
+          <button onClick={() => submitReport(report)} className="underline hover:no-underline font-black">Try Again Now</button>
         </div>
       )}
 
-      <AnimatePresence>
-        {exportError && (
-          <motion.div 
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="bg-red-600 text-white overflow-hidden"
-          >
-            <div className="px-6 py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Database size={12} />
-                <span>Export Failed: {exportError}</span>
-              </div>
-              <X size={12} className="cursor-pointer opacity-50 hover:opacity-100" />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {error && !syncError && (
+        <div className="bg-amber-500 text-white px-6 py-2 text-[10px] font-black uppercase tracking-widest flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={14} />
+            <span>Connection Issue: {error}</span>
+          </div>
+          <button onClick={() => logout()} className="underline hover:no-underline font-black">Re-connect System</button>
+        </div>
+      )}
 
       <div className="flex-1 p-4 lg:p-8 print:p-0 overflow-y-auto custom-scrollbar">
         <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-4 lg:p-12 print:border-none print:shadow-none print:p-0">
@@ -1176,8 +1000,8 @@ function AppContent() {
   const { token, selectedBoardId, loading, activeView } = useMonday();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  if (!token) {
-    return <TokenEntry />;
+  if (!token || !selectedBoardId) {
+    return <MondaySetup />;
   }
 
   return (
@@ -1223,6 +1047,7 @@ function Dashboard() {
   const { boardData, token, selectedBoardId } = useMonday();
   const [analyticsData, setAnalyticsData] = useState<QCReport[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
+  const [dataError, setDataError] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedQc, setSelectedQc] = useState<QCReport | null>(null);
@@ -1230,6 +1055,7 @@ function Dashboard() {
   const fetchDetailedData = async () => {
     if (!token || !selectedBoardId) return;
     setIsDataLoading(true);
+    setDataError(null);
     try {
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
@@ -1253,7 +1079,12 @@ function Dashboard() {
         })
       });
       const result = await response.json();
-      const items = result.data.boards[0]?.items_page?.items || [];
+      if (result.errors) throw new Error(result.errors[0].message);
+      
+      const board = result.data?.boards?.[0];
+      if (!board) throw new Error("Board not found. It may have been deleted or your permissions changed.");
+      
+      const items = board.items_page?.items || [];
       
       const parsedReports: QCReport[] = items.map((item: any) => {
         const updateBody = item.updates[0]?.body || '';
@@ -1301,8 +1132,9 @@ function Dashboard() {
 
       setAnalyticsData(parsedReports);
       setLastSyncTime(new Date());
-    } catch (err) {
+    } catch (err: any) {
       console.error("Dashboard Fetch Error:", err);
+      setDataError(err.message);
     } finally {
       setIsDataLoading(false);
     }
@@ -1313,6 +1145,28 @@ function Dashboard() {
   }, [selectedBoardId]);
 
   const istNow = toZonedTime(new Date(), 'Asia/Kolkata');
+
+  if (dataError) {
+    return (
+      <div className="h-full flex items-center justify-center p-12 text-center bg-white flex-1 overflow-y-auto">
+        <div className="max-w-md">
+          <div className="w-16 h-16 border-4 border-red-600 flex items-center justify-center mb-6 mx-auto">
+            <AlertCircle className="text-red-600" size={32} />
+          </div>
+          <h2 className="text-2xl font-black uppercase mb-4 tracking-tighter">Analytical Link Severed</h2>
+          <p className="text-xs font-mono opacity-60 mb-8 uppercase tracking-widest leading-relaxed">
+            {dataError}
+          </p>
+          <button 
+            onClick={fetchDetailedData}
+            className="px-8 py-3 bg-[#141414] text-white font-black uppercase text-[10px] tracking-widest hover:invert transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]"
+          >
+            Retry Connection
+          </button>
+        </div>
+      </div>
+    );
+  }
   
   const filteredReports = useMemo(() => {
     if (!searchQuery) return analyticsData;
@@ -1704,16 +1558,40 @@ function BoardLiveMonitor() {
             <p className="text-[10px] font-mono opacity-40 uppercase">Live Synchronization View</p>
           </div>
         </div>
-        <button 
-          onClick={() => {
-            setTempUrl(customEmbedUrls[selectedBoardId || ''] || '');
-            setIsEditingEmbed(!isEditingEmbed);
-          }}
-          className="flex items-center gap-2 px-4 py-2 border border-[#141414] text-[10px] font-bold uppercase tracking-widest hover:bg-gray-50 transition-all"
-        >
-          <Settings size={14} /> {isEditingEmbed ? 'Cancel' : 'Update Embed Link'}
-        </button>
+        <div className="flex items-center gap-3">
+          <a 
+            href={`https://monday.com/boards/${selectedBoardId}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2 px-4 py-2 bg-[#141414] text-white text-[10px] font-bold uppercase tracking-widest hover:invert transition-all"
+          >
+            <ExternalLink size={14} /> Edit in Monday
+          </a>
+          <button 
+            onClick={() => {
+              setTempUrl(customEmbedUrls[selectedBoardId || ''] || '');
+              setIsEditingEmbed(!isEditingEmbed);
+            }}
+            className="flex items-center gap-2 px-4 py-2 border border-[#141414] text-[10px] font-bold uppercase tracking-widest hover:bg-gray-50 transition-all"
+          >
+            <Settings size={14} /> {isEditingEmbed ? 'Settings' : 'Update View'}
+          </button>
+        </div>
       </div>
+
+      <AnimatePresence>
+        {!isEditingEmbed && (
+          <motion.div 
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            className="bg-orange-50 border-b border-orange-200 p-2 text-center"
+          >
+            <p className="text-[9px] font-bold text-orange-800 uppercase tracking-widest flex items-center justify-center gap-2">
+              <AlertCircle size={10} /> Note: The view below is a read-only mirror. Use the "Edit in Monday" button above for full board access.
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isEditingEmbed && (
