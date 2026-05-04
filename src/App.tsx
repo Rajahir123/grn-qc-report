@@ -112,7 +112,7 @@ interface MondayContextType {
   selectedBoardId: string | null;
   setSelectedBoardId: (id: string | null) => void;
   boardData: Board | null;
-  fetchBoardDetails: (id: string, customToken?: string) => Promise<any>;
+  fetchBoardDetails: (id: string) => Promise<void>;
   submitReport: (report: QCReport) => Promise<void>;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncError: string | null;
@@ -187,15 +187,14 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const fetchBoardDetails = async (id: string, customToken?: string) => {
-    const activeToken = customToken || token;
-    if (!activeToken) return;
+  const fetchBoardDetails = async (id: string) => {
+    if (!token) return;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': activeToken },
+        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
         body: JSON.stringify({
           query: `
             query {
@@ -223,14 +222,9 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await response.json();
       if (data.errors) throw new Error(data.errors[0].message);
-      if (!data.data.boards || data.data.boards.length === 0) {
-        throw new Error("The board does not exist or you don't have access to it.");
-      }
       setBoardData(data.data.boards[0]);
-      return data.data.boards[0];
     } catch (err: any) {
       setError(err.message);
-      throw err;
     } finally {
       setLoading(false);
     }
@@ -376,39 +370,19 @@ function useMonday() {
 function MondaySetup() {
   const [inputToken, setInputToken] = useState(localStorage.getItem('monday_token') || '');
   const [inputBoardId, setInputBoardId] = useState(localStorage.getItem('selected_board_id') || '');
-  const { setToken, setSelectedBoardId, fetchBoardDetails, loading: contextLoading, error } = useMonday();
-  const [localLoading, setLocalLoading] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
+  const { setToken, setSelectedBoardId, loading, error } = useMonday();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const token = inputToken.trim();
-    let bId = inputBoardId.trim();
-    
-    if (token && bId) {
+    if (inputToken.trim() && inputBoardId.trim()) {
+      let bId = inputBoardId.trim();
       const urlMatch = bId.match(/boards\/(\d+)/);
       if (urlMatch) bId = urlMatch[1];
       
-      setLocalLoading(true);
-      setLocalError(null);
-      
-      try {
-        // Tentatively verify the board exists with this token
-        await fetchBoardDetails(bId, token);
-        
-        // If successful, commit to state
-        setToken(token);
-        setSelectedBoardId(bId);
-      } catch (err: any) {
-        setLocalError(err.message || "Could not verify board. Please check your token and ID.");
-      } finally {
-        setLocalLoading(false);
-      }
+      setToken(inputToken.trim());
+      setSelectedBoardId(bId);
     }
   };
-
-  const displayError = localError || error;
-  const isLoading = localLoading || contextLoading;
 
   return (
     <div className="min-h-screen bg-[#E4E3E0] flex items-center justify-center p-6 font-sans">
@@ -476,19 +450,19 @@ function MondaySetup() {
              </div>
           </div>
 
-          {displayError && (
+          {error && (
             <div className="p-4 bg-red-50 border-2 border-red-600 text-red-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-3">
               <AlertCircle size={16} />
-              <span className="flex-1">{displayError}</span>
+              {error}
             </div>
           )}
 
           <button 
             type="submit"
-            disabled={isLoading}
+            disabled={loading}
             className="w-full bg-[#141414] text-white py-4 font-black uppercase tracking-widest text-xs hover:invert transition-all shadow-[6px_6px_0px_0px_rgba(31,31,31,0.4)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50"
           >
-            {isLoading ? 'Verifying Credentials...' : 'Establish System Link'}
+            {loading ? 'Validating Connection...' : 'Establish System Link'}
           </button>
         </form>
       </motion.div>
@@ -667,7 +641,7 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
 }
 
 function QCReportView() {
-  const { submitReport, syncStatus, syncError, boardData, logout, error } = useMonday();
+  const { submitReport, syncStatus, syncError, boardData, logout } = useMonday();
   const [report, setReport] = useState<QCReport>({
     qcNo: 'QC-' + Math.floor(1000 + Math.random() * 9000),
     lrNo: '',
@@ -768,22 +742,12 @@ function QCReportView() {
       </div>
 
       {syncError && (
-        <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-black uppercase tracking-widest flex items-center justify-between animate-pulse">
+        <div className="bg-red-500 text-white px-6 py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-between animate-pulse">
           <div className="flex items-center gap-2">
             <AlertCircle size={14} />
             <span>Sync Failed: {syncError}</span>
           </div>
-          <button onClick={() => submitReport(report)} className="underline hover:no-underline font-black">Try Again Now</button>
-        </div>
-      )}
-
-      {error && !syncError && (
-        <div className="bg-amber-500 text-white px-6 py-2 text-[10px] font-black uppercase tracking-widest flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertCircle size={14} />
-            <span>Connection Issue: {error}</span>
-          </div>
-          <button onClick={() => logout()} className="underline hover:no-underline font-black">Re-connect System</button>
+          <button onClick={() => submitReport(report)} className="underline hover:no-underline">Try Again Now</button>
         </div>
       )}
 
@@ -1047,7 +1011,6 @@ function Dashboard() {
   const { boardData, token, selectedBoardId } = useMonday();
   const [analyticsData, setAnalyticsData] = useState<QCReport[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
-  const [dataError, setDataError] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedQc, setSelectedQc] = useState<QCReport | null>(null);
@@ -1055,7 +1018,6 @@ function Dashboard() {
   const fetchDetailedData = async () => {
     if (!token || !selectedBoardId) return;
     setIsDataLoading(true);
-    setDataError(null);
     try {
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
@@ -1079,12 +1041,7 @@ function Dashboard() {
         })
       });
       const result = await response.json();
-      if (result.errors) throw new Error(result.errors[0].message);
-      
-      const board = result.data?.boards?.[0];
-      if (!board) throw new Error("Board not found. It may have been deleted or your permissions changed.");
-      
-      const items = board.items_page?.items || [];
+      const items = result.data.boards[0]?.items_page?.items || [];
       
       const parsedReports: QCReport[] = items.map((item: any) => {
         const updateBody = item.updates[0]?.body || '';
@@ -1132,9 +1089,8 @@ function Dashboard() {
 
       setAnalyticsData(parsedReports);
       setLastSyncTime(new Date());
-    } catch (err: any) {
+    } catch (err) {
       console.error("Dashboard Fetch Error:", err);
-      setDataError(err.message);
     } finally {
       setIsDataLoading(false);
     }
@@ -1145,28 +1101,6 @@ function Dashboard() {
   }, [selectedBoardId]);
 
   const istNow = toZonedTime(new Date(), 'Asia/Kolkata');
-
-  if (dataError) {
-    return (
-      <div className="h-full flex items-center justify-center p-12 text-center bg-white flex-1 overflow-y-auto">
-        <div className="max-w-md">
-          <div className="w-16 h-16 border-4 border-red-600 flex items-center justify-center mb-6 mx-auto">
-            <AlertCircle className="text-red-600" size={32} />
-          </div>
-          <h2 className="text-2xl font-black uppercase mb-4 tracking-tighter">Analytical Link Severed</h2>
-          <p className="text-xs font-mono opacity-60 mb-8 uppercase tracking-widest leading-relaxed">
-            {dataError}
-          </p>
-          <button 
-            onClick={fetchDetailedData}
-            className="px-8 py-3 bg-[#141414] text-white font-black uppercase text-[10px] tracking-widest hover:invert transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]"
-          >
-            Retry Connection
-          </button>
-        </div>
-      </div>
-    );
-  }
   
   const filteredReports = useMemo(() => {
     if (!searchQuery) return analyticsData;
