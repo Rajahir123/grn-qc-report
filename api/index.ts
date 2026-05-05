@@ -48,6 +48,7 @@ app.post("/api/monday/proxy", async (req, res) => {
   }
 
   const region = typeof headerRegion === "string" ? headerRegion : "global";
+  // Removed trailing slash as it can cause 405/404 on some API gateways
   const baseUrl = region === "eu" ? "https://api.monday-eu.com/v2" : "https://api.monday.com/v2";
 
   token = token.trim();
@@ -68,12 +69,11 @@ app.post("/api/monday/proxy", async (req, res) => {
 
     console.error(`[Proxy] Monday API Error (${status})`);
     
-    // Detailed error for 404/NOT_FOUND which is common for regional accounts
     if (status === 404 || (typeof errorData === "string" && (errorData.includes("<!DOCTYPE html>") || errorData.includes("NOT_FOUND")))) {
       return res.status(status).json({
-        error: "Monday Gateway Error (404/NOT_FOUND). Your account might be in a specific region (like EU) or the API token does not have access to this endpoint.",
+        error: "Monday Gateway Error (404/NOT_FOUND). Check your token and region.",
         status,
-        details: typeof errorData === "string" ? errorData.substring(0, 300) : "Check if you need api.monday-eu.com",
+        details: typeof errorData === "string" ? errorData.substring(0, 300) : "Try api.monday-eu.com if in EU",
       });
     }
 
@@ -81,31 +81,20 @@ app.post("/api/monday/proxy", async (req, res) => {
   }
 });
 
-// GET for debugging
 app.get("/api/monday/proxy", (req, res) => {
   res.json({ status: "alive", message: "Monday proxy is ready" });
 });
 
-// Explicitly handle 404 for missing API routes
 app.all("/api/*", (req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });
 });
 
-// Serve frontend in production
-if (process.env.NODE_ENV === "production") {
-  const distPath = path.join(process.cwd(), "dist");
-  app.use(express.static(distPath));
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(distPath, "index.html"));
-  });
-} else {
-  // In development, Vite middleware will be added by the dev server runner
-}
+// For Vercel, we need to export the app but also handle static serving if requested
+// However, rewrites in vercel.json usually handle the SPA fallback.
+// We don't start the listener here for Vercel.
 
-// Development server startup
 if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
   const PORT = process.env.PORT || 3000;
-  // We dynamic import here to avoid runtime issues in serverless
   if (process.env.NODE_ENV !== "production") {
     import("vite").then(({ createServer }) => {
       createServer({
