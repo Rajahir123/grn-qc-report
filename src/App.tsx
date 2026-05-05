@@ -105,6 +105,8 @@ interface QCReport {
 interface MondayContextType {
   token: string | null;
   setToken: (token: string | null) => void;
+  region: 'global' | 'eu';
+  setRegion: (region: 'global' | 'eu') => void;
   boards: Board[];
   loading: boolean;
   error: string | null;
@@ -129,6 +131,7 @@ const MondayContext = createContext<MondayContextType | undefined>(undefined);
 
 export function MondayProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(localStorage.getItem('monday_token'));
+  const [region, setRegion] = useState<'global' | 'eu'>((localStorage.getItem('monday_region') as 'global' | 'eu') || 'global');
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,14 +152,16 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (token) {
       localStorage.setItem('monday_token', token);
+      localStorage.setItem('monday_region', region);
       fetchBoards().catch(console.error);
     } else {
       localStorage.removeItem('monday_token');
+      localStorage.removeItem('monday_region');
       localStorage.removeItem('selected_board_id');
       setSelectedBoardId(null);
       setBoardData(null);
     }
-  }, [token]);
+  }, [token, region]);
 
   useEffect(() => {
     if (selectedBoardId && token) {
@@ -172,7 +177,11 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+        headers: { 
+          'Content-Type': 'application/json', 
+          'x-monday-token': token,
+          'x-monday-region': region 
+        },
         body: JSON.stringify({
           query: '{ boards (limit: 500) { id name description } }'
         })
@@ -194,7 +203,11 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+        headers: { 
+          'Content-Type': 'application/json', 
+          'x-monday-token': token,
+          'x-monday-region': region
+        },
         body: JSON.stringify({
           query: `
             query {
@@ -252,7 +265,11 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       const itemName = `${report.qcNo} | ${report.partyName} | ${report.state}`;
       const creationResponse = await fetch('/api/monday/proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+        headers: { 
+          'Content-Type': 'application/json', 
+          'x-monday-token': token,
+          'x-monday-region': region 
+        },
         body: JSON.stringify({
           query: `
             mutation {
@@ -303,7 +320,11 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
 
       const updateResponse = await fetch('/api/monday/proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+        headers: { 
+          'Content-Type': 'application/json', 
+          'x-monday-token': token,
+          'x-monday-region': region
+        },
         body: JSON.stringify({
           query: `
             mutation {
@@ -343,7 +364,7 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
 
   return (
     <MondayContext.Provider value={{ 
-      token, setToken, boards, loading, error, fetchBoards, 
+      token, setToken, region, setRegion, boards, loading, error, fetchBoards, 
       selectedBoardId, setSelectedBoardId, boardData, fetchBoardDetails,
       submitReport,
       syncStatus,
@@ -370,7 +391,7 @@ function useMonday() {
 function MondaySetup() {
   const [inputToken, setInputToken] = useState(localStorage.getItem('monday_token') || '');
   const [inputBoardId, setInputBoardId] = useState(localStorage.getItem('selected_board_id') || '');
-  const { setToken, setSelectedBoardId, loading, error } = useMonday();
+  const { setToken, setSelectedBoardId, region, setRegion, loading, error } = useMonday();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -432,6 +453,29 @@ function MondaySetup() {
                 className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-sm focus:outline-none focus:bg-white transition-all uppercase"
                 required
               />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Account Region</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRegion('global')}
+                  className={`py-2 px-3 text-[10px] font-bold border-2 transition-all ${region === 'global' ? 'border-[#141414] bg-[#141414] text-white' : 'border-[#141414]/20 bg-white text-[#141414]'}`}
+                >
+                  GLOBAL (.com)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRegion('eu')}
+                  className={`py-2 px-3 text-[10px] font-bold border-2 transition-all ${region === 'eu' ? 'border-[#141414] bg-[#141414] text-white' : 'border-[#141414]/20 bg-white text-[#141414]'}`}
+                >
+                  EUROPE (-eu.com)
+                </button>
+              </div>
+              <p className="text-[8px] font-bold opacity-40 mt-1 italic">
+                * Choose Europe if your Monday URL ends in .monday-eu.com
+              </p>
             </div>
           </div>
 
@@ -1008,7 +1052,7 @@ function AppContent() {
 }
 
 function Dashboard() {
-  const { boardData, token, selectedBoardId } = useMonday();
+  const { boardData, token, selectedBoardId, region } = useMonday();
   const [analyticsData, setAnalyticsData] = useState<QCReport[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
@@ -1021,7 +1065,11 @@ function Dashboard() {
     try {
       const response = await fetch('/api/monday/proxy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-monday-token': token },
+        headers: { 
+          'Content-Type': 'application/json', 
+          'x-monday-token': token,
+          'x-monday-region': region
+        },
         body: JSON.stringify({
           query: `
             query {
