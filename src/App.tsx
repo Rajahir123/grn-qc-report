@@ -265,13 +265,13 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       });
       
       if (!creationResponse.ok) {
+        const responseText = await creationResponse.text();
         let errorMessage = `Creation failed (${creationResponse.status})`;
         try {
-          const errorData = await creationResponse.json();
+          const errorData = JSON.parse(responseText);
           if (errorData.error) errorMessage = errorData.error;
         } catch (e) {
-          const text = await creationResponse.text();
-          if (text) errorMessage += `: ${text.substring(0, 100)}`;
+          if (responseText) errorMessage += `: ${responseText.substring(0, 100)}`;
         }
         throw new Error(errorMessage);
       }
@@ -316,13 +316,13 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
       });
 
       if (!updateResponse.ok) {
+        const responseText = await updateResponse.text();
         let errorMessage = `Update failed (${updateResponse.status})`;
         try {
-          const errorData = await updateResponse.json();
+          const errorData = JSON.parse(responseText);
           if (errorData.error) errorMessage = errorData.error;
         } catch (e) {
-          const text = await updateResponse.text();
-          if (text) errorMessage += `: ${text.substring(0, 100)}`;
+          if (responseText) errorMessage += `: ${responseText.substring(0, 100)}`;
         }
         throw new Error(errorMessage);
       }
