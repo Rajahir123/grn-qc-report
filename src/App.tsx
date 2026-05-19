@@ -417,7 +417,8 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json();
       if (response.status === 401 || data.error?.includes("Not Authenticated") || data.errors?.[0]?.includes("Not Authenticated")) {
         logout();
-        setError("Session expired or invalid token. Please log in again.");
+        const t = token ? (token.substring(0,5) + '...') : 'None';
+        setError(`Access Denied (401). Region: ${region}, Token: ${t}. Please check Vercel Environment Variables (Admin_API_Key, MONDAY_REGION).`);
         return;
       }
       if (data.error) throw new Error(data.error);
@@ -470,7 +471,8 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json();
       if (response.status === 401 || data.error?.includes("Not Authenticated") || data.errors?.[0]?.includes("Not Authenticated") || data.proxy_status === 401) {
         logout();
-        setError("Session expired or invalid token. Please log in again.");
+        const t = token ? (token.substring(0,5) + '...') : 'None';
+        setError(`Access Denied (401). Region: ${region}, Token: ${t}. Please check Vercel Environment Variables (Admin_API_Key, MONDAY_REGION).`);
         return;
       }
       if (data.error) throw new Error(data.error);
@@ -681,7 +683,8 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       if (creationResponse.status === 401 || creationData.error?.includes("Not Authenticated") || creationData.errors?.[0]?.includes("Not Authenticated") || creationData.proxy_status === 401) {
         logout();
         setSyncStatus('error');
-        setSyncError("Session expired or invalid token. Please log in again.");
+        const t = token ? (token.substring(0,5) + '...') : 'None';
+        setSyncError(`Access Denied (401). Region: ${region}, Token: ${t}. Please check Vercel Environment Variables.`);
         return;
       }
       
@@ -1653,12 +1656,12 @@ function QCReportView() {
         </div>
       )}
 
-      <div className="flex-1 p-4 lg:p-8 print:p-0 overflow-y-auto custom-scrollbar">
-        <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-4 lg:p-12 print:border-none print:shadow-none print:p-0">
+      <div className="flex-1 p-2 md:p-4 lg:p-8 print:p-0 overflow-y-auto custom-scrollbar">
+        <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] md:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-2 md:p-4 lg:p-12 print:border-none print:shadow-none print:p-0 relative mobile-zoom-out">
           
-          <div className="text-center py-4 lg:py-10 mb-6 lg:mb-8 border-b-4 border-double border-[#141414] relative overflow-hidden bg-gray-50/50">
+          <div className="text-center py-3 md:py-6 lg:py-10 mb-4 md:mb-6 lg:mb-8 border-b-4 border-double border-[#141414] relative overflow-hidden bg-gray-50/50">
             <span className="absolute top-0 left-0 w-full h-[1px] bg-[#141414]/10" />
-            <h1 className="text-xl lg:text-4xl font-black uppercase tracking-[0.2em] lg:tracking-[0.4em] inline-block relative px-4">
+            <h1 className="text-base md:text-xl lg:text-4xl font-black uppercase tracking-[0.1em] md:tracking-[0.2em] lg:tracking-[0.4em] inline-block relative px-2 md:px-4">
               <span className="absolute -left-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
               Sales Return QC Report (GRN)
               <span className="absolute -right-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
@@ -1668,8 +1671,8 @@ function QCReportView() {
           {/* Header Metadata */}
           <div className="border-2 border-[#141414] mb-4 lg:mb-8 divide-y-2 divide-[#141414]">
             {/* Row 1 */}
-            <div className="grid grid-cols-2 md:grid-cols-4 divide-x-2 divide-[#141414]">
-              <div className="p-2 lg:p-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 divide-x-2 divide-[#141414] border-b-2 border-[#141414] sm:border-none">
+              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
                 <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">QC.NO</label>
                 <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
               </div>
@@ -1688,8 +1691,8 @@ function QCReportView() {
             </div>
 
             {/* Row 2 */}
-            <div className="grid grid-cols-2 md:grid-cols-4 divide-x-2 divide-[#141414]">
-              <div className="p-2 lg:p-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 divide-x-2 divide-[#141414] border-b-2 border-[#141414] sm:border-none">
+              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
                 <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV NO/PO NO</label>
                 <input type="text" value={report.rtvNoPoNo} onChange={e => setReport({...report, rtvNoPoNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
               </div>
@@ -1773,8 +1776,8 @@ function QCReportView() {
             </div>
           </div>
 
-          <div className="flex flex-col md:grid md:grid-cols-4 border-2 border-[#141414] mb-6 divide-y-2 md:divide-y-0 md:divide-x-2 divide-[#141414]">
-            <div className="md:col-span-3 p-3 lg:p-4 flex items-center gap-3 lg:gap-4 relative">
+          <div className="flex flex-col lg:grid lg:grid-cols-4 border-2 border-[#141414] mb-4 md:mb-6 divide-y-2 lg:divide-y-0 lg:divide-x-2 divide-[#141414]">
+            <div className="lg:col-span-3 p-2 lg:p-4 flex items-center gap-2 lg:gap-4 relative">
               <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">Party Name:</label>
               <div className="flex-1 relative">
                 <input 
@@ -2022,14 +2025,14 @@ function QCReportView() {
       </div>
 
       {/* SKU Floating Picker */}
-      <div className="fixed bottom-12 right-12 z-20 flex flex-col items-end gap-4 print:hidden">
+      <div className="fixed bottom-6 right-6 lg:bottom-12 lg:right-12 z-50 flex flex-col items-end gap-4 print:hidden">
         <AnimatePresence>
           {isSkuPickerOpen && (
             <motion.div 
               initial={{ opacity: 0, y: 20, scale: 0.9 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 20, scale: 0.9 }}
-              className="bg-white border-2 border-[#141414] p-6 shadow-2xl w-80 max-h-[400px] flex flex-col"
+              className="bg-white border-2 border-[#141414] p-4 lg:p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-2xl w-[90vw] sm:w-80 max-h-[60vh] sm:max-h-[400px] flex flex-col"
             >
               <h3 className="text-xs font-black uppercase tracking-widest mb-4 flex items-center justify-between">
                 Inventory Picker

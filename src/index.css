@@ -5,6 +5,12 @@
 }
 
 @layer utilities {
+  @media screen and (max-width: 768px) {
+    .mobile-zoom-out {
+      zoom: 0.45;
+    }
+  }
+
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
     height: 6px;
