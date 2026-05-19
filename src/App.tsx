@@ -415,8 +415,14 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
       const data = await response.json();
-      if (data.errors) throw new Error(data.errors[0].message);
-      setBoards(data.data.boards || []);
+      if (response.status === 401 || data.error?.includes("Not Authenticated") || data.errors?.[0]?.includes("Not Authenticated")) {
+        logout();
+        setError("Session expired or invalid token. Please log in again.");
+        return;
+      }
+      if (data.error) throw new Error(data.error);
+      if (data.errors) throw new Error(data.errors[0].message || data.errors[0]);
+      setBoards(data.data?.boards || []);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -462,8 +468,14 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
       const data = await response.json();
-      if (data.errors) throw new Error(data.errors[0].message);
-      setBoardData(data.data.boards[0]);
+      if (response.status === 401 || data.error?.includes("Not Authenticated") || data.errors?.[0]?.includes("Not Authenticated") || data.proxy_status === 401) {
+        logout();
+        setError("Session expired or invalid token. Please log in again.");
+        return;
+      }
+      if (data.error) throw new Error(data.error);
+      if (data.errors) throw new Error(data.errors[0].message || data.errors[0]);
+      setBoardData(data.data?.boards?.[0] || null);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -666,8 +678,18 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         throw new Error(`Invalid response from proxy (${creationResponse.status}): ${responseText.substring(0, 100)}`);
       }
       
+      if (creationResponse.status === 401 || creationData.error?.includes("Not Authenticated") || creationData.errors?.[0]?.includes("Not Authenticated") || creationData.proxy_status === 401) {
+        logout();
+        setSyncStatus('error');
+        setSyncError("Session expired or invalid token. Please log in again.");
+        return;
+      }
+      
       if (!creationResponse.ok) {
-        throw new Error(creationData.error || creationData.message || `Creation failed (${creationResponse.status})`);
+        const backendError = creationData.error || creationData.message || creationData.error_message;
+        const mappedErrors = creationData.errors ? creationData.errors.map((e: any) => e.message).join(', ') : null;
+        const debugInfo = JSON.stringify(creationData).substring(0, 200);
+        throw new Error(backendError || mappedErrors || `Creation failed (${creationResponse.status}): ${debugInfo}`);
       }
       
       if (creationData.errors) {
@@ -725,8 +747,16 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
         throw new Error(`Item created (v${mainItemId}), but details failed. Invalid response (${updateResponse.status})`);
       }
 
+      if (updateResponse.status === 401 || updateData.error?.includes("Not Authenticated") || updateData.errors?.[0]?.includes("Not Authenticated") || updateData.proxy_status === 401) {
+        logout();
+        setSyncStatus('error');
+        setSyncError("Session expired or invalid token while adding details. Please log in again.");
+        return;
+      }
+
       if (!updateResponse.ok) {
-        throw new Error("Item created, but failed to add details: " + (updateData.error || updateData.message || updateResponse.status));
+        const updateDebug = JSON.stringify(updateData).substring(0, 200);
+        throw new Error(`Item created, but failed to add details (v${mainItemId}): ${updateData.error || updateData.message || updateResponse.status}. Debug: ${updateDebug}`);
       }
 
       if (updateData.errors) {
@@ -801,8 +831,14 @@ function MondaySetup() {
       });
       const data = await res.json();
       if (data.success && data.mondayToken && data.boardId) {
+        const extractedBoardId = data.boardId.replace(/[^0-9]/g, '');
+        if (!extractedBoardId) {
+          setLoginError('Invalid Target_Board_ID format. Must contain digits.');
+          return;
+        }
         setToken(data.mondayToken);
-        setSelectedBoardId(data.boardId);
+        setRegion(data.region === 'eu' ? 'eu' : 'global');
+        setSelectedBoardId(extractedBoardId);
       } else if (data.success) {
         setLoginError('Setup needed: Please configure Admin_API_Key and Target_Board_ID in the settings menu.');
       } else {
@@ -869,6 +905,13 @@ function MondaySetup() {
                 <div className="p-4 bg-red-50 border-2 border-red-600 text-red-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-3">
                   <AlertCircle size={16} />
                   {loginError}
+                </div>
+              )}
+
+              {error && (
+                <div className="p-4 bg-red-50 border-2 border-red-600 text-red-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-3">
+                  <AlertCircle size={16} />
+                  {error}
                 </div>
               )}
 
@@ -2542,7 +2585,7 @@ function QCHistoryView() {
 }
 
 function Dashboard() {
-  const { boardData, token, selectedBoardId, region } = useMonday();
+  const { boardData, token, selectedBoardId, region, logout } = useMonday();
   const [analyticsData, setAnalyticsData] = useState<QCReport[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
@@ -2579,7 +2622,13 @@ function Dashboard() {
         })
       });
       const result = await response.json();
-      const items = result.data.boards[0]?.items_page?.items || [];
+      
+      if (response.status === 401 || result.error?.includes("Not Authenticated") || result.errors?.[0]?.includes("Not Authenticated") || result.proxy_status === 401) {
+        logout();
+        return;
+      }
+      
+      const items = result.data?.boards?.[0]?.items_page?.items || [];
       
       const parsedReports: QCReport[] = items.map((item: any) => {
         const updateBody = item.updates[0]?.body || '';

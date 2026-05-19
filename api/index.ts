@@ -52,23 +52,26 @@ app.post("/api/export/gsheet", async (req, res) => {
 app.post("/api/monday/proxy", async (req, res) => {
   const headerToken = req.headers["x-monday-token"];
   const headerRegion = req.headers["x-monday-region"];
-  const envToken = process.env.MONDAY_API_TOKEN;
+  const mToken = process.env.MONDAY_API_TOKEN;
+  const aToken = process.env.Admin_API_Key || process.env.ADMIN_API_KEY;
+  const envToken = (mToken && !mToken.includes("YOUR_")) ? mToken : (aToken && !aToken.includes("YOUR_") ? aToken : "");
 
   let token = (
-    typeof headerToken === "string" ? headerToken :
-    (Array.isArray(headerToken) ? headerToken[0] :
-    (envToken && !envToken.includes("YOUR_") ? envToken : null))
+    typeof headerToken === "string" && headerToken !== "" && !headerToken.includes("YOUR_") ? headerToken :
+    (Array.isArray(headerToken) && headerToken[0] !== "" && !headerToken[0].includes("YOUR_") ? headerToken[0] :
+    (envToken ? envToken : null))
   );
 
   if (!token || token === "null" || token === "undefined") {
     return res.status(401).json({ error: "Missing Monday API Token" });
   }
 
-  const region = typeof headerRegion === "string" ? headerRegion : "global";
+  const requestRegion = typeof headerRegion === "string" ? headerRegion : (process.env.MONDAY_REGION || "global");
+  const region = requestRegion.toString().toLowerCase() === "eu" ? "eu" : "global";
   // Removed trailing slash as it can cause 405/404 on some API gateways
   const baseUrl = region === "eu" ? "https://api.monday-eu.com/v2" : "https://api.monday.com/v2";
 
-  token = token.trim();
+  token = token.toString().replace(/^["']|["']$/g, '').replace(/^Bearer\s+/i, '').replace(/[\r\n\s]+/g, '').trim();
   console.log(`[Proxy] Incoming POST to /api/monday/proxy (Region: ${region})`);
 
   if (!req.body || typeof req.body !== "object") {
@@ -99,27 +102,43 @@ app.post("/api/monday/proxy", async (req, res) => {
       });
     }
 
-    if (status === 500) {
-      console.error("[Proxy] 500 Internal Server Error details:", {
-        message: error.message,
-        data: errorData,
-        requestId: error.response?.headers?.["x-request-id"],
-        payload: req.body
-      });
+    if (status === 401) {
+      console.error("[Proxy] Monday API Error: 401 Unauthorized. The API token is invalid.", errorData);
     }
-
-    res.status(status).json(errorData || { error: "Failed to connect to Monday.com", details: error.message });
+    
+    let responseBody = errorData;
+    if (typeof errorData === "string") {
+      responseBody = { error: errorData };
+    } else if (!errorData || typeof errorData !== "object") {
+      responseBody = { error: "Unknown error from Monday API", raw: errorData };
+    }
+    
+    // Pass back as much info as possible for debugging
+    res.status(status).json({ 
+      ...responseBody,
+      proxy_status: status, 
+      proxy_details: error.message,
+      debug_region: region,
+      debug_tokenLength: token?.length,
+      debug_tokenPreview: token ? token.substring(0, 5) + '...' : 'none'
+    });
   }
 });
 
 app.post("/api/admin/login", (req, res) => {
   const { password } = req.body;
   
+  const mToken = process.env.MONDAY_API_TOKEN;
+  const aToken = process.env.Admin_API_Key || process.env.ADMIN_API_KEY;
+  const envToken = (mToken && !mToken.includes("YOUR_")) ? mToken : (aToken && !aToken.includes("YOUR_") ? aToken : "");
+  const targetBoard = process.env.Target_Board_ID || process.env.TARGET_BOARD_ID || "";
+  
   if (password === "1522") {
     return res.json({
       success: true,
-      mondayToken: process.env.MONDAY_API_TOKEN || process.env.Admin_API_Key || "",
-      boardId: process.env.Target_Board_ID || process.env.TARGET_BOARD_ID || ""
+      mondayToken: envToken.toString().replace(/^["']|["']$/g, '').trim(),
+      boardId: targetBoard.includes("YOUR_") ? "" : targetBoard.toString().replace(/^["']|["']$/g, '').trim(),
+      region: (process.env.MONDAY_REGION || "global").toString().replace(/^["']|["']$/g, '').toLowerCase().trim()
     });
   }
   
@@ -128,11 +147,14 @@ app.post("/api/admin/login", (req, res) => {
 
 app.get("/api/monday/proxy", (req, res) => {
   console.log("[Proxy] GET /api/monday/proxy ping received");
+  const mToken = process.env.MONDAY_API_TOKEN || "";
+  const aToken = process.env.Admin_API_Key || process.env.ADMIN_API_KEY || "";
+  const hasValidToken = (mToken && !mToken.includes("YOUR_")) || (aToken && !aToken.includes("YOUR_"));
   res.json({ 
     status: "alive", 
     message: "Monday proxy is ready",
     env: process.env.NODE_ENV,
-    hasToken: !!process.env.MONDAY_API_TOKEN
+    hasToken: !!hasValidToken
   });
 });
 
