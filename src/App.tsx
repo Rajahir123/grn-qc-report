@@ -415,7 +415,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
       const data = await response.json();
-      if (response.status === 401 || data.error?.includes("Not Authenticated") || data.errors?.[0]?.includes("Not Authenticated")) {
+      if (response.status === 401 || JSON.stringify(data || {}).includes("Not Authenticated")) {
         logout();
         const t = token ? (token.substring(0,5) + '...') : 'None';
         setError(`Access Denied (401). Region: ${region}, Token: ${t}. Please check Vercel Environment Variables (Admin_API_Key, MONDAY_REGION).`);
@@ -469,7 +469,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         })
       });
       const data = await response.json();
-      if (response.status === 401 || data.error?.includes("Not Authenticated") || data.errors?.[0]?.includes("Not Authenticated") || data.proxy_status === 401) {
+      if (response.status === 401 || JSON.stringify(data || {}).includes("Not Authenticated") || data.proxy_status === 401) {
         logout();
         const t = token ? (token.substring(0,5) + '...') : 'None';
         setError(`Access Denied (401). Region: ${region}, Token: ${t}. Please check Vercel Environment Variables (Admin_API_Key, MONDAY_REGION).`);
@@ -572,10 +572,14 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         if (!col || !value) return;
         if (col.type === 'status') {
           columnValues[col.id] = { label: String(value) };
+        } else if (col.type === 'dropdown') {
+          columnValues[col.id] = { labels: [String(value)] };
         } else if (col.type === 'numbers') {
           columnValues[col.id] = String(value).replace(/[^0-9.]/g, '');
         } else if (col.type === 'date') {
           columnValues[col.id] = { date: String(value) };
+        } else if (col.type === 'color_picker') {
+           // Skip, otherwise 500
         } else {
           columnValues[col.id] = String(value);
         }
@@ -610,14 +614,14 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
           } catch (e) { }
           const labelsMap = settings.labels || {};
           const labels = Object.values(labelsMap) as string[];
-          const matchedLabel = labels.find(l => l && l.toUpperCase().includes(report.state.toUpperCase()));
+          const matchedLabel = labels.find(l => l && l.toUpperCase().includes((report.state || "").toUpperCase()));
           if (matchedLabel) {
             columnValues[stateCol.id] = { label: matchedLabel };
           } else {
-            columnValues[stateCol.id] = report.state;
+            columnValues[stateCol.id] = { label: report.state };
           }
         } else {
-          columnValues[stateCol.id] = report.state;
+          setColValue(stateCol, report.state);
         }
       }
 
@@ -680,7 +684,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         throw new Error(`Invalid response from proxy (${creationResponse.status}): ${responseText.substring(0, 100)}`);
       }
       
-      if (creationResponse.status === 401 || creationData.error?.includes("Not Authenticated") || creationData.errors?.[0]?.includes("Not Authenticated") || creationData.proxy_status === 401) {
+      if (creationResponse.status === 401 || JSON.stringify(creationData || {}).includes("Not Authenticated") || creationData.proxy_status === 401) {
         logout();
         setSyncStatus('error');
         const t = token ? (token.substring(0,5) + '...') : 'None';
@@ -750,7 +754,7 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
         throw new Error(`Item created (v${mainItemId}), but details failed. Invalid response (${updateResponse.status})`);
       }
 
-      if (updateResponse.status === 401 || updateData.error?.includes("Not Authenticated") || updateData.errors?.[0]?.includes("Not Authenticated") || updateData.proxy_status === 401) {
+      if (updateResponse.status === 401 || JSON.stringify(updateData || {}).includes("Not Authenticated") || updateData.proxy_status === 401) {
         logout();
         setSyncStatus('error');
         setSyncError("Session expired or invalid token while adding details. Please log in again.");
@@ -1676,7 +1680,7 @@ function QCReportView() {
                 <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">QC.NO</label>
                 <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
               </div>
-              <div className="p-2 lg:p-3">
+              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
                 <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">LR NO</label>
                 <input type="text" value={report.lrNo} onChange={e => setReport({...report, lrNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
               </div>
@@ -1696,7 +1700,7 @@ function QCReportView() {
                 <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV NO/PO NO</label>
                 <input type="text" value={report.rtvNoPoNo} onChange={e => setReport({...report, rtvNoPoNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
               </div>
-              <div className="p-2 lg:p-3">
+              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
                 <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">DN Date</label>
                 <input type="date" value={report.dnDate} onChange={e => setReport({...report, dnDate: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
               </div>
@@ -2213,8 +2217,8 @@ function QCHistoryView() {
   }, [auth.currentUser]);
 
   const filteredReports = reports.filter(r => 
-    r.qcNo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    r.partyName?.toLowerCase().includes(searchTerm.toLowerCase())
+    (r.qcNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (r.partyName || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const toggleSelect = (id: string) => {
@@ -2626,7 +2630,7 @@ function Dashboard() {
       });
       const result = await response.json();
       
-      if (response.status === 401 || result.error?.includes("Not Authenticated") || result.errors?.[0]?.includes("Not Authenticated") || result.proxy_status === 401) {
+      if (response.status === 401 || JSON.stringify(result || {}).includes("Not Authenticated") || result.proxy_status === 401) {
         logout();
         return;
       }
@@ -2695,9 +2699,9 @@ function Dashboard() {
   const filteredReports = useMemo(() => {
     if (!searchQuery) return analyticsData;
     return analyticsData.filter(r => 
-      r.qcNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.partyName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.state.toLowerCase().includes(searchQuery.toLowerCase())
+      (r.qcNo || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (r.partyName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (r.state || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [analyticsData, searchQuery]);
 
@@ -3152,8 +3156,8 @@ function BoardLiveMonitor() {
         )}
       </AnimatePresence>
 
-      <div className="flex-1 p-8">
-        <div className="w-full h-full bg-white border-2 border-[#141414] shadow-[12px_12px_0px_0px_rgba(0,0,0,0.1)] overflow-hidden">
+      <div className="flex-1 p-2 md:p-8 overflow-hidden relative">
+        <div className="w-[222%] h-[222%] md:w-full md:h-full origin-top-left mobile-zoom-out bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] md:shadow-[12px_12px_0px_0px_rgba(0,0,0,0.1)] overflow-hidden transition-all duration-300">
           <iframe 
             key={currentEmbedUrl} // Force reload on URL change
             src={currentEmbedUrl}
