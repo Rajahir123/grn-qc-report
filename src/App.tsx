@@ -769,6 +769,9 @@ function useMonday() {
 // --- Components ---
 
 function MondaySetup() {
+  const [mode, setMode] = useState<'password' | 'manual'>('password');
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [inputToken, setInputToken] = useState(localStorage.getItem('monday_token') || '');
   const [inputBoardId, setInputBoardId] = useState(localStorage.getItem('selected_board_id') || '');
   const { setToken, setSelectedBoardId, region, setRegion, loading, error } = useMonday();
@@ -783,6 +786,31 @@ function MondaySetup() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    if (!password) return;
+
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      const data = await res.json();
+      if (data.success && data.mondayToken && data.boardId) {
+        setToken(data.mondayToken);
+        setSelectedBoardId(data.boardId);
+      } else if (data.success) {
+        setLoginError('Setup needed: Please configure Admin_API_Key and Target_Board_ID in the settings menu.');
+      } else {
+        setLoginError(data.error || 'Invalid password or system unconfigured.');
+      }
+    } catch (err) {
+      setLoginError('Server error.');
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -802,10 +830,10 @@ function MondaySetup() {
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md bg-white border-2 border-[#141414] p-8 shadow-[12px_12px_0px_0px_rgba(20,20,20,1)]"
+        className="w-full max-w-md bg-white border-2 border-[#141414] p-8 shadow-[12px_12px_0px_0px_rgba(20,20,20,1)] flex flex-col"
       >
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-12 h-12 bg-[#141414] flex items-center justify-center">
+          <div className="w-12 h-12 bg-[#141414] flex items-center justify-center shrink-0">
             <Database className="text-white w-6 h-6" />
           </div>
           <div>
@@ -814,102 +842,165 @@ function MondaySetup() {
           </div>
         </div>
 
-        <div className="mb-8 p-4 bg-red-600 text-white space-y-2 shadow-[4px_4px_0px_0px_rgba(153,27,27,1)]">
-          <h3 className="text-[10px] font-black uppercase tracking-widest">Admin Authorization</h3>
-          <p className="text-[10px] leading-relaxed font-medium opacity-90">
-            Authentication requires a **Personal API Token v2**. Ensure your token has permission to write updates and items.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Admin API Key</label>
-              <input 
-                type="password"
-                value={inputToken}
-                onChange={(e) => setInputToken(e.target.value)}
-                placeholder="Paste API v2 token..."
-                className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-sm focus:outline-none focus:bg-white transition-all"
-                required
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Target Board ID</label>
-              <input 
-                type="text"
-                value={inputBoardId}
-                onChange={(e) => setInputBoardId(e.target.value)}
-                placeholder="Enter Numeric Board ID or URL..."
-                className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-sm focus:outline-none focus:bg-white transition-all uppercase"
-                required
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Account Region</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setRegion('global')}
-                  className={`py-2 px-3 text-[10px] font-bold border-2 transition-all ${region === 'global' ? 'border-[#141414] bg-[#141414] text-white' : 'border-[#141414]/20 bg-white text-[#141414]'}`}
-                >
-                  GLOBAL (.com)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRegion('eu')}
-                  className={`py-2 px-3 text-[10px] font-bold border-2 transition-all ${region === 'eu' ? 'border-[#141414] bg-[#141414] text-white' : 'border-[#141414]/20 bg-white text-[#141414]'}`}
-                >
-                  EUROPE (-eu.com)
-                </button>
-              </div>
-              <p className="text-[8px] font-bold opacity-40 mt-1 italic">
-                * Choose Europe if your Monday URL ends in .monday-eu.com
+        {mode === 'password' ? (
+          <>
+            <div className="mb-8 p-4 bg-[#141414] text-white space-y-2 shadow-[4px_4px_0px_0px_rgba(100,100,100,1)]">
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-[#E4E3E0]">Quick Access</h3>
+              <p className="text-[10px] leading-relaxed font-medium opacity-90">
+                Enter your 4-digit system password to automatically authenticate and link the platform.
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={downloadDocs}
-              className="w-full py-4 px-4 bg-white border-2 border-[#141414] text-[#141414] text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] active:shadow-none active:translate-x-1 active:translate-y-1"
-            >
-              <FileText size={14} />
-              Download Full Documentation
-            </button>
-          </div>
+            <form onSubmit={handlePasswordSubmit} className="space-y-6">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase tracking-widest opacity-60">System PIN / Password</label>
+                <input 
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="&bull;&bull;&bull;&bull;"
+                  maxLength={4}
+                  className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-center text-4xl tracking-[0.5em] focus:outline-none focus:bg-white transition-all placeholder:text-[#ccc]"
+                  required
+                />
+              </div>
 
-          <div className="p-4 bg-gray-50 border border-dotted border-[#141414]/40 space-y-3">
-             <div className="flex items-start gap-2">
-                <div className="w-4 h-4 bg-green-500 flex-shrink-0 mt-0.5" />
-                <p className="text-[9px] font-bold leading-tight opacity-70">
-                  <span className="text-[#141414]">TOKEN:</span> Profile &rarr; Admin &rarr; API &rarr; Copy Personal Token
-                </p>
-             </div>
-             <div className="flex items-start gap-2">
-                <div className="w-4 h-4 bg-blue-500 flex-shrink-0 mt-0.5" />
-                <p className="text-[9px] font-bold leading-tight opacity-70">
-                  <span className="text-[#141414]">BOARD:</span> Open your board and copy the number in the URL
-                </p>
-             </div>
-          </div>
+              {loginError && (
+                <div className="p-4 bg-red-50 border-2 border-red-600 text-red-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-3">
+                  <AlertCircle size={16} />
+                  {loginError}
+                </div>
+              )}
 
-          {error && (
-            <div className="p-4 bg-red-50 border-2 border-red-600 text-red-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-3">
-              <AlertCircle size={16} />
-              {error}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-4 px-8 bg-[#141414] text-white text-[12px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-black transition-all shadow-[6px_6px_0px_0px_rgba(20,20,20,0.3)] active:shadow-none active:translate-x-[6px] active:translate-y-[6px]"
+              >
+                {loading ? 'Authenticating...' : 'Enter System'} <ChevronRight className="w-4 h-4" />
+              </button>
+
+              <div className="pt-4 text-center">
+                <button
+                  type="button"
+                  onClick={() => setMode('manual')}
+                  className="text-[10px] font-bold opacity-40 uppercase tracking-widest border-b-2 border-transparent hover:border-[#141414] hover:opacity-100 transition-all pb-1"
+                >
+                  Configure Manually &rarr;
+                </button>
+              </div>
+            </form>
+          </>
+        ) : (
+          <>
+            <div className="mb-8 p-4 bg-red-600 text-white space-y-2 shadow-[4px_4px_0px_0px_rgba(153,27,27,1)]">
+              <h3 className="text-[10px] font-black uppercase tracking-widest">Admin Authorization</h3>
+              <p className="text-[10px] leading-relaxed font-medium opacity-90">
+                Authentication requires a **Personal API Token v2**. Ensure your token has permission to write updates and items.
+              </p>
             </div>
-          )}
 
-          <button 
-            type="submit"
-            disabled={loading}
-            className="w-full bg-[#141414] text-white py-4 font-black uppercase tracking-widest text-xs hover:invert transition-all shadow-[6px_6px_0px_0px_rgba(31,31,31,0.4)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50"
-          >
-            {loading ? 'Validating Connection...' : 'Establish System Link'}
-          </button>
-        </form>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Admin API Key</label>
+                  <input 
+                    type="password"
+                    value={inputToken}
+                    onChange={(e) => setInputToken(e.target.value)}
+                    placeholder="Paste API v2 token..."
+                    className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-sm focus:outline-none focus:bg-white transition-all"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Target Board ID</label>
+                  <input 
+                    type="text"
+                    value={inputBoardId}
+                    onChange={(e) => setInputBoardId(e.target.value)}
+                    placeholder="Enter Numeric Board ID or URL..."
+                    className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-4 font-mono text-sm focus:outline-none focus:bg-white transition-all uppercase"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Account Region</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRegion('global')}
+                      className={`py-2 px-3 text-[10px] font-bold border-2 transition-all ${region === 'global' ? 'border-[#141414] bg-[#141414] text-white' : 'border-[#141414]/20 bg-white text-[#141414]'}`}
+                    >
+                      GLOBAL (.com)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRegion('eu')}
+                      className={`py-2 px-3 text-[10px] font-bold border-2 transition-all ${region === 'eu' ? 'border-[#141414] bg-[#141414] text-white' : 'border-[#141414]/20 bg-white text-[#141414]'}`}
+                    >
+                      EUROPE (-eu.com)
+                    </button>
+                  </div>
+                  <p className="text-[8px] font-bold opacity-40 mt-1 italic">
+                    * Choose Europe if your Monday URL ends in .monday-eu.com
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={downloadDocs}
+                  className="w-full py-4 px-4 bg-white border-2 border-[#141414] text-[#141414] text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] active:shadow-none active:translate-x-1 active:translate-y-1"
+                >
+                  <FileText size={14} />
+                  Download Full Documentation
+                </button>
+              </div>
+
+              <div className="p-4 bg-gray-50 border border-dotted border-[#141414]/40 space-y-3">
+                 <div className="flex items-start gap-2">
+                    <div className="w-4 h-4 bg-green-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-[9px] font-bold leading-tight opacity-70">
+                      <span className="text-[#141414]">TOKEN:</span> Profile &rarr; Admin &rarr; API &rarr; Copy Personal Token
+                    </p>
+                 </div>
+                 <div className="flex items-start gap-2">
+                    <div className="w-4 h-4 bg-blue-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-[9px] font-bold leading-tight opacity-70">
+                      <span className="text-[#141414]">BOARD:</span> Open your board and copy the number in the URL
+                    </p>
+                 </div>
+              </div>
+
+              {error && (
+                <div className="p-4 bg-red-50 border-2 border-red-600 text-red-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-3">
+                  <AlertCircle size={16} />
+                  {error}
+                </div>
+              )}
+
+              <button 
+                type="submit"
+                disabled={loading}
+                className="w-full bg-[#141414] text-white py-4 font-black uppercase tracking-widest text-xs hover:invert transition-all shadow-[6px_6px_0px_0px_rgba(31,31,31,0.4)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50"
+              >
+                {loading ? 'Validating Connection...' : 'Establish System Link'}
+              </button>
+
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={() => setMode('password')}
+                  className="text-[10px] font-bold opacity-40 uppercase tracking-widest border-b-2 border-transparent hover:border-[#141414] hover:opacity-100 transition-all pb-1"
+                >
+                  &larr; Back to Quick Login
+                </button>
+              </div>
+            </form>
+          </>
+        )}
       </motion.div>
     </div>
   );

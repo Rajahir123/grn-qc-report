@@ -112,6 +112,20 @@ app.post("/api/monday/proxy", async (req, res) => {
   }
 });
 
+app.post("/api/admin/login", (req, res) => {
+  const { password } = req.body;
+  
+  if (password === "1522") {
+    return res.json({
+      success: true,
+      mondayToken: process.env.MONDAY_API_TOKEN || process.env.Admin_API_Key || "",
+      boardId: process.env.Target_Board_ID || process.env.TARGET_BOARD_ID || ""
+    });
+  }
+  
+  res.status(401).json({ error: "Invalid password" });
+});
+
 app.get("/api/monday/proxy", (req, res) => {
   console.log("[Proxy] GET /api/monday/proxy ping received");
   res.json({ 
