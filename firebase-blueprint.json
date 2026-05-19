@@ -1,0 +1,99 @@
+{
+  "entities": {
+    "QCDraft": {
+      "title": "QC Report Draft",
+      "description": "A draft of a QC report being filled out by a user.",
+      "type": "object",
+      "properties": {
+        "qcNo": { "type": "string" },
+        "lrNo": { "type": "string" },
+        "date": { "type": "string" },
+        "boxQty": { "type": "string" },
+        "partyName": { "type": "string" },
+        "state": { "type": "string" },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/entities/QCReportRow"
+          }
+        },
+        "approvedBy": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "boardId": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["boardId", "updatedAt"]
+    },
+    "QCReportPermanent": {
+      "title": "QC Report Permanent",
+      "description": "A finalized and synced QC report.",
+      "type": "object",
+      "properties": {
+        "qcNo": { "type": "string" },
+        "lrNo": { "type": "string" },
+        "date": { "type": "string" },
+        "boxQty": { "type": "string" },
+        "rtvNoPoNo": { "type": "string" },
+        "dnDate": { "type": "string" },
+        "rtvAmount": { "type": "string" },
+        "transporter": { "type": "string" },
+        "noteNarration": { "type": "string" },
+        "partyName": { "type": "string" },
+        "state": { "type": "string" },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/entities/QCReportRow"
+          }
+        },
+        "approvedBy": { "type": "string" },
+        "syncedAt": { "type": "string", "format": "date-time" },
+        "boardId": { "type": "string" },
+        "userId": { "type": "string" }
+      }
+    },
+    "QCReportRow": {
+      "title": "QC Report Row",
+      "type": "object",
+      "properties": {
+        "oldSku": { "type": "string" },
+        "newSku": { "type": "string" },
+        "billQtyUnit": { "type": "number" },
+        "receivedUnit": { "type": "number" },
+        "notReceivedUnit": { "type": "number" },
+        "expiredUnit": { "type": "number" },
+        "damagesRepairable": { "type": "number" },
+        "rejectNonRepairable": { "type": "number" },
+        "use": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "mfgDate": { "type": "string" },
+        "expDate": { "type": "string" }
+      }
+    },
+    "MasterParty": {
+      "title": "Master Party",
+      "description": "A reusable party entity for the QC system.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "addedBy": { "type": "string" }
+      },
+      "required": ["name", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/qcDrafts/{draftId}": {
+      "schema": "QCDraft",
+      "description": "Collection of QC report drafts."
+    },
+    "/qcReports/{reportId}": {
+      "schema": "QCReportPermanent",
+      "description": "Collection of finalized QC reports."
+    },
+    "/masterParties/{partyId}": {
+      "schema": "MasterParty",
+      "description": "Universal list of parties shared across the system."
+    }
+  }
+}

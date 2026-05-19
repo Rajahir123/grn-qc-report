@@ -1,20 +1,37 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Monday Board Connect (QC Sync)
 
-# Run and deploy your AI Studio app
+A production-grade tool for syncing Quality Control reports to Monday.com boards with multi-region support and Google Sheets export capabilities.
 
-This contains everything you need to run your app locally.
+## 🚀 Getting Started
 
-View your app in AI Studio: https://ai.studio/apps/5bb431db-5532-45b0-a076-869e9ec9306f
+### Prerequisites
+- Node.js (v20 or higher)
+- npm or yarn
 
-## Run Locally
+### Installation
+```bash
+npm install
+```
 
-**Prerequisites:**  Node.js
+### Local Development
+```bash
+npm run dev
+```
+The app will be available at `http://localhost:3000`.
 
+## 📦 Deployment
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### Deploy to Vercel
+This project is pre-configured for Vercel. Simply connect your GitHub repository to Vercel, and it will automatically detect the settings.
+
+### Key Files
+- `server.ts`: Local development server.
+- `api/index.ts`: Vercel serverless function entry.
+- `vercel.json`: Vercel routing configuration.
+
+## 🛡️ Security
+- **API Proxy**: All requests to Monday.com are proxied to hide tokens and avoid CORS issues.
+- **Multi-Region**: Supports EU and Global Monday.com accounts.
+
+## 📜 License
+Private - Created for denyteny123@gmail.com

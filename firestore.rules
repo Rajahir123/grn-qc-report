@@ -1,0 +1,90 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 3. Path Variable Hardening helper
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Validation Blueprint for QCDraft
+    function isValidQCDraft(data) {
+      return data.keys().hasAll(['boardId', 'updatedAt', 'qcNo', 'lrNo', 'date', 'boxQty', 'partyName', 'state', 'rows', 'approvedBy', 'userId', 'rtvNoPoNo', 'dnDate', 'rtvAmount', 'transporter', 'noteNarration']) &&
+             data.boardId is string && data.boardId.size() <= 128 &&
+             data.qcNo is string && data.qcNo.size() <= 64 &&
+             data.lrNo is string && data.lrNo.size() <= 64 &&
+             data.date is string && data.date.size() <= 20 &&
+             data.boxQty is string && data.boxQty.size() <= 20 &&
+             data.rtvNoPoNo is string && data.rtvNoPoNo.size() <= 128 &&
+             data.dnDate is string && data.dnDate.size() <= 20 &&
+             data.rtvAmount is string && data.rtvAmount.size() <= 64 &&
+             data.transporter is string && data.transporter.size() <= 128 &&
+             data.noteNarration is string && data.noteNarration.size() <= 2000 &&
+             data.partyName is string && data.partyName.size() <= 256 &&
+             data.state is string && data.state.size() <= 128 &&
+             data.rows is list && data.rows.size() <= 500 &&
+             data.approvedBy is string && data.approvedBy.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.updatedAt is timestamp;
+    }
+
+    match /qcDrafts/{boardId} {
+      // Allow any signed in user to read/write drafts for a board they are on.
+      // In a more complex app, we'd check Monday permissions, but for now 
+      // simple authenticated access is the baseline.
+      
+      allow get: if isSignedIn();
+      
+      allow create: if isSignedIn() 
+                    && isValidId(boardId) 
+                    && isValidQCDraft(incoming())
+                    && incoming().boardId == boardId
+                    && incoming().userId == request.auth.uid
+                    && incoming().updatedAt == request.time;
+                    
+      allow update: if isSignedIn()
+                    && isValidId(boardId)
+                    && isValidQCDraft(incoming())
+                    && incoming().boardId == boardId
+                    && incoming().userId == request.auth.uid
+                    && incoming().updatedAt == request.time
+                    && incoming().diff(existing()).affectedKeys().hasAny(['qcNo', 'lrNo', 'date', 'boxQty', 'partyName', 'state', 'rows', 'approvedBy', 'updatedAt', 'rtvNoPoNo', 'dnDate', 'rtvAmount', 'transporter', 'noteNarration']);
+                    
+      allow delete: if isSignedIn();
+    }
+
+    match /qcReports/{reportId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn()
+                    && isValidId(reportId)
+                    && incoming().qcNo == reportId
+                    && incoming().userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && (existing().userId == request.auth.uid);
+    }
+
+    match /boardConfigs/{boardId} {
+      allow get, list: if isSignedIn();
+      allow write: if isSignedIn() && isValidId(boardId);
+    }
+
+    match /masterParties/{partyId} {
+      allow get, list: if true;
+      allow create: if request.auth != null 
+                    && request.resource.data.name is string 
+                    && request.resource.data.name.size() <= 256
+                    && request.resource.data.createdAt == request.time;
+    }
+  }
+}

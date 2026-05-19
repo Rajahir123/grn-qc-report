@@ -11,6 +11,13 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
 // API Routes
+/**
+ * GOOGLE SHEETS EXPORT ENDPOINT
+ * 
+ * Sends QC data to a Google Apps Script webhook for reporting.
+ * 
+ * @body { url: string, data: object }
+ */
 app.post("/api/export/gsheet", async (req, res) => {
   const { url, data } = req.body;
   if (!url) {
@@ -32,6 +39,16 @@ app.post("/api/export/gsheet", async (req, res) => {
   }
 });
 
+/**
+ * MONDAY.COM PROXY ENDPOINT
+ * 
+ * This endpoint handles communication with the Monday.com API.
+ * It support multi-region accounts (Global vs EU).
+ * 
+ * @header x-monday-token - The personal API token
+ * @header x-monday-region - 'global' or 'eu'
+ * @body { query: string, variables: object } - GraphQL payload
+ */
 app.post("/api/monday/proxy", async (req, res) => {
   const headerToken = req.headers["x-monday-token"];
   const headerRegion = req.headers["x-monday-region"];
@@ -52,7 +69,12 @@ app.post("/api/monday/proxy", async (req, res) => {
   const baseUrl = region === "eu" ? "https://api.monday-eu.com/v2" : "https://api.monday.com/v2";
 
   token = token.trim();
-  console.log(`[Proxy] Request to Monday API (${region})`);
+  console.log(`[Proxy] Incoming POST to /api/monday/proxy (Region: ${region})`);
+
+  if (!req.body || typeof req.body !== "object") {
+    console.warn("[Proxy] Missing or invalid body in POST request");
+    return res.status(400).json({ error: "Invalid request body" });
+  }
 
   try {
     const response = await axios.post(baseUrl, req.body, {
@@ -71,9 +93,18 @@ app.post("/api/monday/proxy", async (req, res) => {
     
     if (status === 404 || (typeof errorData === "string" && (errorData.includes("<!DOCTYPE html>") || errorData.includes("NOT_FOUND")))) {
       return res.status(status).json({
-        error: "Monday Gateway Error (404/NOT_FOUND). Check your token and region.",
+        error: "Monday Gateway Error (404/NOT_FOUND). Check token/region.",
         status,
-        details: typeof errorData === "string" ? errorData.substring(0, 300) : "Try api.monday-eu.com if in EU",
+        details: typeof errorData === "string" ? errorData.substring(0, 300) : "Check regional endpoint"
+      });
+    }
+
+    if (status === 500) {
+      console.error("[Proxy] 500 Internal Server Error details:", {
+        message: error.message,
+        data: errorData,
+        requestId: error.response?.headers?.["x-request-id"],
+        payload: req.body
       });
     }
 
@@ -82,7 +113,13 @@ app.post("/api/monday/proxy", async (req, res) => {
 });
 
 app.get("/api/monday/proxy", (req, res) => {
-  res.json({ status: "alive", message: "Monday proxy is ready" });
+  console.log("[Proxy] GET /api/monday/proxy ping received");
+  res.json({ 
+    status: "alive", 
+    message: "Monday proxy is ready",
+    env: process.env.NODE_ENV,
+    hasToken: !!process.env.MONDAY_API_TOKEN
+  });
 });
 
 app.all("/api/*", (req, res) => {

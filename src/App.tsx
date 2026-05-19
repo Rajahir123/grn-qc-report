@@ -6,6 +6,7 @@ import {
   Search, 
   Plus, 
   ChevronRight, 
+  ChevronDown,
   User, 
   Calendar, 
   CheckCircle2, 
@@ -24,7 +25,9 @@ import {
   Share2,
   Database,
   Check,
-  ArrowLeft
+  ArrowLeft,
+  History,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SKUS, type SKUMapping } from './lib/skus';
@@ -44,7 +47,191 @@ import {
 import { format, parse, isBefore, isValid } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 
-// --- Types ---
+import * as XLSX from 'xlsx';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { 
+  getFirestore, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocFromServer, 
+  deleteDoc, 
+  serverTimestamp,
+  Timestamp,
+  collection,
+  query,
+  where,
+  orderBy,
+  getDocs,
+  writeBatch,
+  onSnapshot,
+  addDoc
+} from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+const firebaseApp = initializeApp(firebaseConfig);
+export const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+export const auth = getAuth(firebaseApp);
+
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if(error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Please check your Firebase configuration.");
+    }
+  }
+}
+testConnection();
+
+const INDIAN_STATES = [
+  "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", 
+  "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", 
+  "Karnataka", "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", 
+  "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", 
+  "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura", 
+  "Uttar Pradesh", "Uttarakhand", "West Bengal",
+  "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu", 
+  "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry"
+];
+
+const TRANSPORTERS = [
+  "Flipkart",
+  "Safexpress",
+  "XPEED",
+  "Shree Maruti",
+  "v- xpress",
+  "Metropolis logisticss",
+  "GATI",
+  "LALJI MULJI",
+  "DELHIVERY",
+  "XPRESS BEES",
+  "All cargo"
+];
+
+const INITIAL_PARTIES = [
+  "Hands on trades", "Scootsy", "Flipkart", "Amazon", "Reliance", "WAL-MART INDIA PVT",
+  "NATURES BASKET", "1 is one marketing", "More retail pvt", "GenRikTail enterprises",
+  "Innovative retail", "BIC NELAMANGLA", "Retail market KR puram", "Fitholic Raw pvt ltd",
+  "Hyuga E-commerce venture pvt", "heera impex", "Metro cash carry India pvt", "Bigbasket",
+  "Anand bharti", "Fit factory", "metrocash and carry india LTD", "kasana brothers",
+  "Khera trading", "MORE RETAIL PVT", "PAREKH ENTERPRISE", "MAA KALKA TRADERS",
+  "ANAND ENTERPRISES", "KAMLA ENTERPRISE", "GUNJAN SALES", "Shree balajee enterprises",
+  "AG Nutrition", "Niteeka Enterprises", "Nutrition XP", "Zepto", "Apollo Health co ltd",
+  "Omkara globallog B2B", "Aastha Traders shop", "Supreme sales corporation",
+  "Melons & moons pvt ltd", "Ritesh distributers", "Classic craft", "Nutrabay retail pvt ltd",
+  "B-fit boss nutrition", "patil enterprises", "Kasana brothers", "Vijin Enterprise",
+  "Genriktail enterprises", "Anand Enterprises", "AJFAN International",
+  "Indian food & Beverages", "Shiv Kripa Trading Co.", "Shubh laxmi enterprise", "Rakesh Distributor"
+];
+
+const DOCUMENTATION_MARKDOWN = `# 🛠️ Developer Manifesto: Monday Board Connect
+
+This document is a technical post-mortem and developer guide for the **Monday Board Connect (QC Sync)** application. It outlines how the app was built from scratch, the design decisions made, and the prompts used to generate the logic.
+
+---
+
+## 🏗️ The Build Flow (Mental Model)
+
+The app was built using a **Modular Iteration** approach:
+
+1.  **UI Skeleton**: Initialized the dashboard with a "Brutalist" design aesthetic (heavy borders, high contrast).
+2.  **API Bridge**: Built a Node.js Express proxy to solve two problems: **CORS limitations** and **Security of API Secrets**.
+3.  **Authentication Layer**: Implemented a dynamic token system where users enter their Personal API token once, which is then stored in local storage for subsequent sessions.
+4.  **Sync Logic**: Developed a two-stage GraphQL mutation (Create Item -> Update Columns) to handle the complex structure of Monday.com items.
+5.  **Multi-Region Support**: Added a region-aware routing system to toggle between \`.monday.com\` and \`.monday-eu.com\` gateways.
+6.  **Vercel Optimization**: Created a dedicated \`api/index.ts\` to support Vercel's Serverless Function architectural needs.
+
+---
+
+## 📜 Developer Prompts (Chronological History)
+
+Here are the core prompts used to instruct the AI during development:
+
+1.  **Initialization**: *"Create a React 19 app with Vite and Tailwind v4. The design should be brutalist (black/white, thick borders). I need a dashboard to manage Quality Control reports."*
+2.  **Monday Integration**: *"Implement a proxy server in express to handle Monday.com GraphQL requests. Use headers for the API token. Support global and EU regions."*
+3.  **Data Schema**: *"Create a QC Report builder UI that captures QC No, Party Name, and State. Sync these to a Monday.com board using mutations."*
+4.  **Vercel Deployment**: *"Build a vercel.json and a standalone serverless function in /api/index.ts that mirrors the logic in server.ts but is optimized for cloud hosting."*
+5.  **Security Protocol**: *"Create an AGENTS.md file that mandates an 'Approval Protocol' before any major changes. AI must provide Pros and Cons for every update."*
+
+---
+
+## 🧩 Component Breakdown
+
+### 1. The Proxy (Backend)
+-   **File**: \`api/index.ts\` & \`server.ts\`
+-   **Logic**: Uses \`axios\` to relay POST requests. It strips problematic trailing slashes and dynamically sets the \`Authorization\` and \`API-Version\` headers.
+
+### 2. The Context Provider (State Manager)
+-   **File**: \`src/App.tsx\` -> \`MondayProvider\`
+-   **Logic**: Wraps the app in a logic layer that refreshes Monday Board data every time the API token or Region changes.
+
+### 3. The Sync Engine
+-   **Function**: \`submitReport\`
+-   **Logic**: 
+    - \`Mutation 1\`: Creates the item with just the name. 
+    - \`Mutation 2\`: Stringifies a JSON object of column values (using Monday's \`change_multiple_column_values\` API) and applies them to the newly created ID.
+
+---
+
+## 🚀 Guidelines for Future Developers
+
+-   **Adding Columns**: To sync a new piece of data, you must add it to the \`QCReport\` interface in \`App.tsx\` and then update the GraphQL JSON payload in the \`change_multiple_column_values\` mutation.
+-   **Regional Gateway**: If you get a 404, check the headers on the proxy. The \`x-monday-region\` header must be correctly set to \`eu\` to talk to the European servers.
+-   **Local Development**: Run the app using \`tsx server.ts\` to ensure the proxy and frontend run on the same port (3000).
+
+---
+*Documentation Version: 2.0.0*
+*For: denyteny123@gmail.com*`;
+// These define the structure of the data used throughout the application.
 
 interface Column {
   id: string;
@@ -52,6 +239,9 @@ interface Column {
   type: string;
 }
 
+/**
+ * Representation of a Monday.com Item
+ */
 interface Item {
   id: string;
   name: string;
@@ -96,6 +286,11 @@ interface QCReport {
   lrNo: string;
   date: string;
   boxQty: string;
+  rtvNoPoNo: string;
+  dnDate: string;
+  rtvAmount: string;
+  transporter: string;
+  noteNarration: string;
   partyName: string;
   state: string;
   rows: QCRow[];
@@ -137,17 +332,50 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(localStorage.getItem('selected_board_id'));
   const [boardData, setBoardData] = useState<Board | null>(null);
-  const [customEmbedUrls, setCustomEmbedUrls] = useState<Record<string, string>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('custom_embed_urls') || '{}');
-    } catch {
-      return {};
-    }
-  });
+  const [customEmbedUrls, setCustomEmbedUrls] = useState<Record<string, string>>({});
 
+  // Fetch board configs from Firestore when selected board changes
   useEffect(() => {
-    localStorage.setItem('custom_embed_urls', JSON.stringify(customEmbedUrls));
-  }, [customEmbedUrls]);
+    async function fetchBoardConfig() {
+      if (!selectedBoardId || !auth.currentUser) return;
+      try {
+        const configDoc = await getDoc(doc(db, 'boardConfigs', selectedBoardId));
+        if (configDoc.exists()) {
+          const data = configDoc.data();
+          if (data.embedUrl) {
+            setCustomEmbedUrls(prev => ({ ...prev, [selectedBoardId]: data.embedUrl }));
+          }
+        } else if (selectedBoardId === '18411045763') {
+          // Provision the specific requested URL for this board if no config exists
+          const defaultUrl = 'https://view.monday.com/embed/18411045763-24887a6c5d50e8a633ae45bfb9b812c2?r=use1';
+          setCustomEmbedUrl(selectedBoardId, defaultUrl);
+        }
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `boardConfigs/${selectedBoardId}`);
+      }
+    }
+    
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (u) fetchBoardConfig();
+    });
+    if (auth.currentUser) fetchBoardConfig();
+    return () => unsubscribe();
+  }, [selectedBoardId]);
+
+  const setCustomEmbedUrl = async (boardId: string, url: string) => {
+    setCustomEmbedUrls(prev => ({ ...prev, [boardId]: url }));
+    if (!auth.currentUser) return;
+    try {
+      await setDoc(doc(db, 'boardConfigs', boardId), {
+        boardId,
+        embedUrl: url,
+        updatedAt: serverTimestamp(),
+        updatedBy: auth.currentUser.uid
+      }, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `boardConfigs/${boardId}`);
+    }
+  };
 
   useEffect(() => {
     if (token) {
@@ -215,7 +443,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
                 id
                 name
                 description
-                columns { id title type }
+                columns { id title type settings_str }
                 items_page (limit: 50) {
                   items {
                     id
@@ -257,43 +485,190 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
     setActiveView('builder');
   };
 
+  /**
+   * Submits a Quality Control report to Monday.com.
+   * This involves two steps:
+   * 1. Creating the item (the main report header).
+   * 2. Updating column values (the detailed QC data).
+   */
   const submitReport = async (report: QCReport) => {
     if (!token || !selectedBoardId) return;
     setSyncStatus('syncing');
     setSyncError(null);
     try {
-      const itemName = `${report.qcNo} | ${report.partyName} | ${report.state}`;
+      // Logic to find Status, State and Transporter columns
+      const statusCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        let settings: any = {};
+        try {
+          settings = c.settings_str ? JSON.parse(c.settings_str) : {};
+        } catch (e) { }
+        const labels = settings.labels || (settings.labels_positions_v2 ? Object.values(settings.labels_positions_v2) : []);
+        const isStatusType = c.type === 'status';
+        const hasCorrectTitle = title === 'status' || title.includes('qc') || title.includes('process');
+        const notOwner = !title.includes('owner') && !title.includes('party') && !title.includes('people');
+        if (isStatusType && notOwner) {
+          const hasReceived = Object.values(labels).some((l: any) => 
+            typeof l === 'string' && (l.toLowerCase().includes('received') || l.toLowerCase().includes('done'))
+          );
+          if (hasReceived || hasCorrectTitle) return true;
+        }
+        return false;
+      }) || boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return (c.type === 'status' || title.includes('status')) && !title.includes('owner') && !title.includes('party');
+      });
+
+      const stateCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title.includes('state') && c.type !== 'people' && c.type !== 'multiple-person' && !title.includes('owner');
+      });
+
+      const transporterCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title.includes('transporter') && c.type !== 'people' && c.type !== 'multiple-person' && !title.includes('owner');
+      });
+
+      const partyCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return (title.includes('party') || title.includes('client')) && title !== 'party owner' && c.type !== 'people' && c.type !== 'multiple-person';
+      });
+
+      const requestDateCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title === 'request date';
+      }) || boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return (title.includes('request date') || title.includes('date')) && !title.includes('dispatch') && c.type !== 'people' && c.type !== 'multiple-person';
+      });
+
+      const invoiceCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title === 'invoice, lr, qc' || title === 'invoice, lr, qc column';
+      }) || boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return (title.includes('invoice') || title.includes('lr') || title.includes('qc')) && !title.includes('status') && c.type !== 'status' && c.type !== 'people';
+      });
+
+      const itemName = `Report from ${report.partyName || 'Vendor'} - ${report.lrNo || 'N/A'} - ${report.qcNo || 'N/A'}`.substring(0, 250);
+      
+      const columnValues: Record<string, any> = {};
+      
+      const setColValue = (col: any, value: any) => {
+        if (!col || !value) return;
+        if (col.type === 'status') {
+          columnValues[col.id] = { label: String(value) };
+        } else if (col.type === 'numbers') {
+          columnValues[col.id] = String(value).replace(/[^0-9.]/g, '');
+        } else if (col.type === 'date') {
+          columnValues[col.id] = { date: String(value) };
+        } else {
+          columnValues[col.id] = String(value);
+        }
+      };
+
+      // Update Status to "Received" if column found. 
+      if (statusCol) {
+        let settings: any = {};
+        try {
+          settings = statusCol.settings_str ? JSON.parse(statusCol.settings_str) : {};
+        } catch (e) {
+          console.error("Error parsing statusCol settings:", e);
+        }
+        const labelsMap = settings.labels || {};
+        const labels = Object.values(labelsMap).map((l: any) => typeof l === 'string' ? l.toLowerCase() : '');
+        
+        if (labels.includes('received')) {
+          columnValues[statusCol.id] = { label: "Received" };
+        } else if (labels.includes('qc done')) {
+          columnValues[statusCol.id] = { label: "QC Done" };
+        } else if (labels.includes('done')) {
+          columnValues[statusCol.id] = { label: "Done" };
+        }
+      }
+      
+      // Sync State
+      if (stateCol && report.state) {
+        if (stateCol.type === 'status') {
+          let settings: any = {};
+          try {
+            settings = stateCol.settings_str ? JSON.parse(stateCol.settings_str) : {};
+          } catch (e) { }
+          const labelsMap = settings.labels || {};
+          const labels = Object.values(labelsMap) as string[];
+          const matchedLabel = labels.find(l => l && l.toUpperCase().includes(report.state.toUpperCase()));
+          if (matchedLabel) {
+            columnValues[stateCol.id] = { label: matchedLabel };
+          } else {
+            columnValues[stateCol.id] = report.state;
+          }
+        } else {
+          columnValues[stateCol.id] = report.state;
+        }
+      }
+
+      // Sync others using helper
+      setColValue(transporterCol, report.transporter);
+      setColValue(partyCol, report.partyName);
+      
+      if (requestDateCol && report.date && requestDateCol.type === 'date') {
+        columnValues[requestDateCol.id] = { date: report.date };
+      }
+
+      const skipTypes = ['formula', 'lookup', 'mirror', 'progress', 'dependency'];
+      if (invoiceCol && report.lrNo && !skipTypes.includes(invoiceCol.type)) {
+        setColValue(invoiceCol, report.lrNo);
+      }
+
+      const mutation = `
+        mutation($boardId: ID!, $itemName: String!, $columnValues: JSON) {
+          create_item (
+            board_id: $boardId, 
+            item_name: $itemName,
+            column_values: $columnValues
+          ) {
+            id
+          }
+        }
+      `;
+
+      // Monday 2024-04 JSON scalar expects a STRING representation of the JSON object
+      const columnValuesVariable = Object.keys(columnValues).length > 0 ? JSON.stringify(columnValues) : "{}";
+
       const creationResponse = await fetch('/api/monday/proxy', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json', 
-          'x-monday-token': token,
+          'x-monday-token': token || '',
           'x-monday-region': region 
         },
         body: JSON.stringify({
-          query: `
-            mutation {
-              create_item (board_id: "${selectedBoardId}", item_name: ${JSON.stringify(itemName)}) {
-                id
-              }
-            }
-          `
+          query: mutation,
+          variables: {
+            boardId: String(selectedBoardId),
+            itemName: itemName,
+            columnValues: columnValuesVariable
+          }
         })
       });
       
-      if (!creationResponse.ok) {
-        const responseText = await creationResponse.text();
-        let errorMessage = `Creation failed (${creationResponse.status})`;
-        try {
-          const errorData = JSON.parse(responseText);
-          if (errorData.error) errorMessage = errorData.error;
-        } catch (e) {
-          if (responseText) errorMessage += `: ${responseText.substring(0, 100)}`;
-        }
-        throw new Error(errorMessage);
+      const responseContentType = creationResponse.headers.get('content-type') || '';
+      const responseText = await creationResponse.text();
+      
+      if (responseContentType.includes('text/html') || responseText.trim().startsWith('<!')) {
+        throw new Error(`Sync Error: Proxy returned HTML instead of JSON (${creationResponse.status}). This usually means the API route was not found or the server is starting up. Details: ${responseText.substring(0, 100)}...`);
       }
 
-      const creationData = await creationResponse.json();
+      let creationData;
+      try {
+        creationData = JSON.parse(responseText);
+      } catch (e) {
+        throw new Error(`Invalid response from proxy (${creationResponse.status}): ${responseText.substring(0, 100)}`);
+      }
+      
+      if (!creationResponse.ok) {
+        throw new Error(creationData.error || creationData.message || `Creation failed (${creationResponse.status})`);
+      }
       
       if (creationData.errors) {
         throw new Error(creationData.errors.map((e: any) => e.message).join(', '));
@@ -318,6 +693,14 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
 **APPROVE BY:** ${report.approvedBy}
       `;
 
+      const updateMutation = `
+        mutation($itemId: ID!, $body: String!) {
+          create_update (item_id: $itemId, body: $body) {
+            id
+          }
+        }
+      `;
+
       const updateResponse = await fetch('/api/monday/proxy', {
         method: 'POST',
         headers: { 
@@ -326,29 +709,26 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
           'x-monday-region': region
         },
         body: JSON.stringify({
-          query: `
-            mutation {
-              create_update (item_id: "${mainItemId}", body: ${JSON.stringify(tableMarkdown)}) {
-                id
-              }
-            }
-          `
+          query: updateMutation,
+          variables: {
+            itemId: mainItemId,
+            body: tableMarkdown
+          }
         })
       });
 
-      if (!updateResponse.ok) {
-        const responseText = await updateResponse.text();
-        let errorMessage = `Update failed (${updateResponse.status})`;
-        try {
-          const errorData = JSON.parse(responseText);
-          if (errorData.error) errorMessage = errorData.error;
-        } catch (e) {
-          if (responseText) errorMessage += `: ${responseText.substring(0, 100)}`;
-        }
-        throw new Error(errorMessage);
+      const updateResponseText = await updateResponse.text();
+      let updateData;
+      try {
+        updateData = JSON.parse(updateResponseText);
+      } catch (e) {
+        throw new Error(`Item created (v${mainItemId}), but details failed. Invalid response (${updateResponse.status})`);
       }
 
-      const updateData = await updateResponse.json();
+      if (!updateResponse.ok) {
+        throw new Error("Item created, but failed to add details: " + (updateData.error || updateData.message || updateResponse.status));
+      }
+
       if (updateData.errors) {
         throw new Error("Item created, but failed to add details: " + updateData.errors[0].message);
       }
@@ -372,7 +752,7 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
       activeView,
       setActiveView,
       customEmbedUrls,
-      setCustomEmbedUrl: (boardId, url) => setCustomEmbedUrls(prev => ({ ...prev, [boardId]: url })),
+      setCustomEmbedUrl,
       logout
     }}>
       {children}
@@ -392,6 +772,18 @@ function MondaySetup() {
   const [inputToken, setInputToken] = useState(localStorage.getItem('monday_token') || '');
   const [inputBoardId, setInputBoardId] = useState(localStorage.getItem('selected_board_id') || '');
   const { setToken, setSelectedBoardId, region, setRegion, loading, error } = useMonday();
+
+  const downloadDocs = () => {
+    const blob = new Blob([DOCUMENTATION_MARKDOWN], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Monday_Board_Connect_Documentation.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -477,6 +869,15 @@ function MondaySetup() {
                 * Choose Europe if your Monday URL ends in .monday-eu.com
               </p>
             </div>
+
+            <button
+              type="button"
+              onClick={downloadDocs}
+              className="w-full py-4 px-4 bg-white border-2 border-[#141414] text-[#141414] text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] active:shadow-none active:translate-x-1 active:translate-y-1"
+            >
+              <FileText size={14} />
+              Download Full Documentation
+            </button>
           </div>
 
           <div className="p-4 bg-gray-50 border border-dotted border-[#141414]/40 space-y-3">
@@ -514,7 +915,19 @@ function MondaySetup() {
   );
 }
 
-function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+const SIDEBAR_TRANSITION = { type: "tween", duration: 0.2, ease: "circOut" };
+
+function Sidebar({ 
+  isOpen, 
+  onClose, 
+  isMinimized, 
+  onToggleMinimize 
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  isMinimized: boolean; 
+  onToggleMinimize: () => void;
+}) {
   const { boards, setSelectedBoardId, selectedBoardId, logout, activeView, setActiveView } = useMonday();
   const [searchTerm, setSearchTerm] = useState('');
   const [manualId, setManualId] = useState('');
@@ -525,7 +938,6 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
     e.preventDefault();
     if (manualId.trim()) {
       let id = manualId.trim();
-      // Extract numeric ID from board URL if pasted
       const urlMatch = id.match(/boards\/(\d+)/);
       if (urlMatch) id = urlMatch[1];
       
@@ -538,7 +950,6 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
 
   return (
     <>
-      {/* Backdrop for mobile */}
       <AnimatePresence>
         {isOpen && (
           <motion.div 
@@ -551,153 +962,451 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) 
         )}
       </AnimatePresence>
 
-      <div className={`
-        fixed inset-y-0 left-0 z-[70] transition-transform duration-300 transform lg:relative lg:translate-x-0 lg:inset-auto
-        ${isOpen ? 'translate-x-0' : '-translate-x-full'}
-        w-80 h-full bg-[#E4E3E0] border-r border-[#141414] flex flex-col print:hidden
-      `}>
-        <div className="p-6 border-b border-[#141414] flex justify-between items-center bg-white/20">
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-[#141414]" />
-            <span className="font-black uppercase tracking-[0.2em] text-xs">GRN System</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <button 
-              onClick={logout} 
-              className="opacity-20 hover:opacity-100 transition-opacity p-2 hover:bg-[#141414] hover:text-white rounded"
-              title="Switch Account & Reset"
+      <motion.div 
+        animate={{ 
+          width: isMinimized ? 72 : 320,
+        }}
+        transition={SIDEBAR_TRANSITION}
+        className={`fixed inset-y-0 left-0 z-[70] lg:relative lg:translate-x-0 lg:inset-auto
+          ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          h-full bg-[#E4E3E0] border-r border-[#141414] flex flex-col print:hidden overflow-hidden`}
+        style={{ willChange: 'width' }}
+      >
+        <div className={`border-b border-[#141414] bg-white/20 flex ${isMinimized ? 'flex-col items-center py-4 gap-4' : 'p-6 justify-between items-center'} min-h-[73px]`}>
+          <motion.div 
+            layout="position"
+            transition={SIDEBAR_TRANSITION}
+            className="flex items-center gap-2 overflow-hidden"
+          >
+            <div className={`shrink-0 bg-[#141414] flex items-center justify-center transition-all duration-100 ${isMinimized ? 'w-8 h-8' : 'w-4 h-4'}`}>
+              {isMinimized ? <Database size={14} className="text-white" /> : null}
+            </div>
+            
+            {!isMinimized && (
+              <motion.span 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="font-black uppercase tracking-[0.2em] text-xs whitespace-nowrap"
+              >
+                GRN System
+              </motion.span>
+            )}
+          </motion.div>
+          
+          <div className={`flex items-center gap-1 ${isMinimized ? 'w-full flex justify-center border-t border-[#141414]/5 pt-4' : ''}`}>
+            <motion.button 
+              layout
+              animate={{ rotate: isMinimized ? 180 : 0 }}
+              transition={SIDEBAR_TRANSITION}
+              onClick={onToggleMinimize}
+              className="hidden lg:block opacity-40 hover:opacity-100 p-2 hover:bg-[#141414] hover:text-white rounded"
+              title="Toggle Panel"
             >
-              <LogOut size={16} />
-            </button>
+              <ArrowLeft size={16} />
+            </motion.button>
+            <AnimatePresence>
+              {!isMinimized && (
+                <motion.button 
+                  key="logout-btn"
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 0.2, scale: 1 }}
+                  whileHover={{ opacity: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  transition={SIDEBAR_TRANSITION}
+                  onClick={logout} 
+                  className="p-2 text-red-600 hover:bg-[#141414] hover:text-white rounded"
+                  title="Switch Account & Reset"
+                >
+                  <LogOut size={16} />
+                </motion.button>
+              )}
+            </AnimatePresence>
             <button onClick={onClose} className="lg:hidden p-2 opacity-50 hover:opacity-100">
               <X size={20} />
             </button>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-[#141414]">
-          <button 
+        <div className="flex flex-col shrink-0">
+          <TabButton 
+            active={activeView === 'builder'} 
             onClick={() => { setActiveView('builder'); onClose(); }}
-            className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'builder' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
-          >
-            Builder
-          </button>
-          <button 
+            isMinimized={isMinimized}
+            icon={<Layout />}
+            label="Builder"
+          />
+          <TabButton 
+            active={activeView === 'monitor'} 
             onClick={() => { setActiveView('monitor'); onClose(); }}
-            className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'monitor' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
-          >
-            Monitor
-          </button>
-          <button 
+            isMinimized={isMinimized}
+            icon={<RefreshCw />}
+            label="Monitor"
+          />
+          <TabButton 
+            active={activeView === 'dashboard'} 
             onClick={() => { setActiveView('dashboard'); onClose(); }}
-            className={`flex-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all ${activeView === 'dashboard' ? 'bg-[#141414] text-white' : 'hover:bg-white'}`}
-          >
-            Analytics
-          </button>
+            isMinimized={isMinimized}
+            icon={<BarChart3 />}
+            label="Analytics"
+          />
+          <TabButton 
+            active={activeView === 'history'} 
+            onClick={() => { setActiveView('history'); onClose(); }}
+            isMinimized={isMinimized}
+            icon={<History />}
+            label="History"
+          />
         </div>
 
-        <div className="p-4 border-b border-[#141414]/10">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" size={14} />
-            <input 
-              type="text"
-              placeholder="Filter boards..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-white/50 border border-[#141414] py-2 pl-9 pr-4 text-xs focus:outline-none focus:bg-white transition-all"
-            />
-          </div>
-        </div>
+        <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-200 ${isMinimized ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+          {activeView === 'builder' ? (
+            <>
+              <div className="p-4 border-b border-[#141414]/10 bg-white/10">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" size={14} />
+                  <input 
+                    type="text"
+                    placeholder="Filter boards..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full bg-white/50 border border-[#141414] py-2 pl-9 pr-4 text-xs focus:outline-none focus:bg-white transition-all shadow-sm"
+                  />
+                </div>
+              </div>
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
-          <div className="space-y-px">
-            {filteredBoards.length > 0 ? (
-              filteredBoards.map(board => (
-                <button
-                  key={board.id}
-                  onClick={() => { setSelectedBoardId(board.id); onClose(); }}
-                  className={`w-full flex items-center gap-3 px-6 py-4 text-left transition-all border-b border-[#141414]/10 group 
-                    ${selectedBoardId === board.id ? 'bg-[#141414] text-white' : 'hover:bg-white/40'}`}
-                >
-                  <Layout size={16} className={selectedBoardId === board.id ? 'text-white' : 'opacity-40'} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate uppercase tracking-tight">{board.name}</p>
-                    <p className={`text-[10px] font-mono truncate opacity-40 ${selectedBoardId === board.id ? 'text-white/60' : ''}`}>
-                      ID: {board.id}
-                    </p>
+              <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="space-y-px">
+                  {filteredBoards.length > 0 ? (
+                    filteredBoards.map(board => (
+                      <button
+                        key={board.id}
+                        onClick={() => { setSelectedBoardId(board.id); onClose(); }}
+                        className={`w-full flex items-center gap-3 px-6 py-4 text-left transition-all border-b border-[#141414]/10 group 
+                          ${selectedBoardId === board.id ? 'bg-[#141414] text-white shadow-inner' : 'hover:bg-white/40'}`}
+                      >
+                        <Layout size={16} className={selectedBoardId === board.id ? 'text-white' : 'opacity-40'} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium uppercase tracking-tight truncate">{board.name}</p>
+                          <p className={`text-[10px] font-mono truncate opacity-40 ${selectedBoardId === board.id ? 'text-white/60' : ''}`}>
+                            ID: {board.id}
+                          </p>
+                        </div>
+                        <ChevronRight size={14} className={`opacity-0 group-hover:opacity-100 transition-all ${selectedBoardId === board.id ? 'text-white opacity-40' : ''}`} />
+                      </button>
+                    ))
+                  ) : (
+                    <div className="p-12 text-center">
+                      <p className="text-[10px] font-mono uppercase opacity-30">{searchTerm ? 'No matches' : 'No boards found'}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="p-4 bg-[#DEDCD7] border-t border-[#141414] space-y-4">
+                <form onSubmit={handleManualConnect} className="relative">
+                  <input 
+                    type="text"
+                    placeholder="Direct Board ID..."
+                    value={manualId}
+                    onChange={(e) => setManualId(e.target.value)}
+                    className="w-full bg-white/50 border border-[#141414] py-2 pl-3 pr-10 text-[10px] uppercase font-bold focus:outline-none focus:bg-white"
+                  />
+                  <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-[#141414]/10">
+                    <ExternalLink size={12} />
+                  </button>
+                </form>
+                
+                <div className="flex items-center gap-3">
+                  <div className={`w-8 h-8 rounded-full border border-[#141414] flex items-center justify-center transition-colors ${selectedBoardId ? 'bg-green-500' : 'bg-red-500'}`}>
+                    <div className={`w-3 h-3 bg-white rounded-full ${selectedBoardId ? 'animate-pulse' : ''}`} />
                   </div>
-                  <ChevronRight size={14} className={`opacity-0 group-hover:opacity-100 transition-all ${selectedBoardId === board.id ? 'text-white opacity-40' : ''}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/60">
+                      {selectedBoardId ? 'Connected' : 'Disconnected'}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-[10px] font-mono truncate text-[#141414]/40">
+                        {selectedBoardId ? `ID: ${selectedBoardId}` : 'Select a board'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    const blob = new Blob([DOCUMENTATION_MARKDOWN], { type: 'text/markdown' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'Monday_Board_Connect_Documentation.md';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-3 bg-white border border-[#141414] text-[9px] font-black uppercase tracking-widest hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] active:shadow-none active:translate-x-1 active:translate-y-1"
+                >
+                  <FileText size={12} /> Download Docs
                 </button>
-              ))
-            ) : (
-              <div className="p-12 text-center">
-                <p className="text-[10px] font-mono uppercase opacity-30">{searchTerm ? 'No matches' : 'No boards found'}</p>
               </div>
-            )}
-          </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 opacity-20 space-y-4">
+              <div className="w-16 h-16 border-2 border-[#141414] flex items-center justify-center rounded-2xl rotate-3">
+                {activeView === 'monitor' ? <RefreshCw size={32} /> : 
+                 activeView === 'dashboard' ? <BarChart3 size={32} /> : 
+                 <History size={32} />}
+              </div>
+              <div className="text-center">
+                <p className="text-[12px] font-black uppercase tracking-[0.2em]">{activeView}</p>
+                <p className="text-[9px] font-bold uppercase opacity-60">System Ready</p>
+              </div>
+            </div>
+          )}
         </div>
-        
-        <div className="p-4 bg-[#DEDCD7] border-t border-[#141414] space-y-4">
-          <form onSubmit={handleManualConnect} className="relative">
-            <input 
-              type="text"
-              placeholder="Direct Board ID..."
-              value={manualId}
-              onChange={(e) => setManualId(e.target.value)}
-              className="w-full bg-white/50 border border-[#141414] py-2 pl-3 pr-10 text-[10px] uppercase font-bold focus:outline-none focus:bg-white"
-            />
-            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-[#141414]/10">
-              <ExternalLink size={12} />
+
+        {isMinimized && (
+          <div className="mt-auto p-4 bg-[#DEDCD7] border-t border-[#141414] flex flex-col items-center gap-2">
+            <button 
+              onClick={logout}
+              className="p-3 text-red-600 hover:bg-red-50 transition-all rounded"
+              title="Logout"
+            >
+              <LogOut size={20} />
             </button>
-          </form>
-          
-          <div className="flex items-center gap-3">
-            <div className={`w-8 h-8 rounded-full border border-[#141414] flex items-center justify-center transition-colors ${selectedBoardId ? 'bg-green-500' : 'bg-red-500'}`}>
-              <div className={`w-3 h-3 bg-white rounded-full ${selectedBoardId ? 'animate-pulse' : ''}`} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/60">
-                {selectedBoardId ? 'Connected' : 'Disconnected'}
-              </p>
-              <div className="flex items-center gap-2">
-                <p className="text-[10px] font-mono truncate text-[#141414]/40">
-                  {selectedBoardId ? `ID: ${selectedBoardId}` : 'Select a board'}
-                </p>
-                {selectedBoardId && (
-                  <a 
-                    href={`https://monday.com/boards/${selectedBoardId}`} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    className="text-[#141414] hover:text-red-600"
-                    title="Open Board in Monday"
-                  >
-                    <ExternalLink size={10} />
-                  </a>
-                )}
-              </div>
-            </div>
           </div>
-        </div>
-      </div>
+        )}
+      </motion.div>
     </>
   );
 }
 
+function TabButton({ active, onClick, isMinimized, icon, label }: any) {
+  return (
+    <button 
+      onClick={onClick}
+      className={`w-full flex items-center gap-4 transition-all duration-200 
+        ${isMinimized ? 'justify-center py-6 border-b border-[#141414]/5' : 'px-8 py-4 justify-start border-b border-[#141414]/10'}
+        ${active ? 'bg-[#141414] text-white' : 'hover:bg-white/60 text-[#141414]/60 hover:text-[#141414]'}`}
+      title={isMinimized ? label : ""}
+    >
+      <div className={`${active ? 'text-white' : 'opacity-40'}`}>
+        {React.cloneElement(icon as React.ReactElement, { size: isMinimized ? 20 : 18 })}
+      </div>
+      {!isMinimized && (
+        <span className="text-[10px] font-black uppercase tracking-[0.2em] whitespace-nowrap">
+          {label}
+        </span>
+      )}
+    </button>
+  );
+}
+
+
 function QCReportView() {
-  const { submitReport, syncStatus, syncError, boardData, logout } = useMonday();
+  const { submitReport, syncStatus, syncError, boardData, logout, selectedBoardId } = useMonday();
   const [report, setReport] = useState<QCReport>({
-    qcNo: 'QC-' + Math.floor(1000 + Math.random() * 9000),
+    qcNo: 'QC',
     lrNo: '',
     date: new Date().toISOString().split('T')[0],
     boxQty: '',
+    rtvNoPoNo: '',
+    dnDate: '',
+    rtvAmount: '',
+    transporter: '',
+    noteNarration: '',
     partyName: '',
     state: '',
     rows: [],
     approvedBy: 'Alpino / Yuvraj'
   });
 
+  const [parties, setParties] = useState<string[]>(INITIAL_PARTIES);
+  const [partySearch, setPartySearch] = useState('');
+  const [showPartyMenu, setShowPartyMenu] = useState(false);
+  const [showTransporterMenu, setShowTransporterMenu] = useState(false);
+  const [showStateMenu, setShowStateMenu] = useState(false);
+  const [stateSearch, setStateSearch] = useState('');
+
+  // Persistent Parties Logic
+  useEffect(() => {
+    if (!auth.currentUser) return;
+
+    const q = query(collection(db, 'masterParties'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const customParties = snapshot.docs.map(doc => doc.data().name as string);
+      // Deduplicate against initial parties
+      const combined = Array.from(new Set([...INITIAL_PARTIES, ...customParties])).sort();
+      setParties(combined);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'masterParties');
+    });
+    return () => unsubscribe();
+  }, [auth.currentUser]);
+
+  const addNewParty = async (name: string) => {
+    if (!name.trim()) return;
+    try {
+      await addDoc(collection(db, 'masterParties'), {
+        name: name.trim(),
+        createdAt: serverTimestamp(),
+        addedBy: auth.currentUser?.uid || 'anonymous'
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'masterParties');
+    }
+  };
+
   const [isSkuPickerOpen, setIsSkuPickerOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const skipNextSave = useRef(false);
+
+  // Load draft on mount or board change
+  useEffect(() => {
+    async function loadDraft() {
+      if (!selectedBoardId || !auth.currentUser) return;
+      const draftPath = `qcDrafts/${selectedBoardId}`;
+      try {
+        const draftDoc = await getDoc(doc(db, draftPath));
+        if (draftDoc.exists()) {
+          const data = draftDoc.data();
+          // Extract only the fields that belong to QCReport to avoid pollution
+          const cleanReport: QCReport = {
+            qcNo: data.qcNo || '',
+            lrNo: data.lrNo || '',
+            date: data.date || '',
+            boxQty: data.boxQty || '',
+            rtvNoPoNo: data.rtvNoPoNo || '',
+            dnDate: data.dnDate || '',
+            rtvAmount: data.rtvAmount || '',
+            transporter: data.transporter || '',
+            noteNarration: data.noteNarration || '',
+            partyName: data.partyName || '',
+            state: data.state || '',
+            rows: data.rows || [],
+            approvedBy: data.approvedBy || ''
+          };
+          skipNextSave.current = true;
+          setReport(cleanReport);
+        }
+      } catch (error) {
+        console.error("Error loading draft:", error);
+      }
+    }
+    
+    // Create an auth listener specifically for this view to trigger loading when auth happens
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) loadDraft();
+    });
+
+    if (auth.currentUser) {
+      loadDraft();
+    }
+    
+    return () => unsubscribe();
+  }, [selectedBoardId]);
+
+  // Save draft whenever report changes
+  useEffect(() => {
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      if (!selectedBoardId || !auth.currentUser) return;
+      setIsSaving(true);
+      const draftPath = `qcDrafts/${selectedBoardId}`;
+      try {
+        await setDoc(doc(db, draftPath), {
+          qcNo: report.qcNo,
+          lrNo: report.lrNo,
+          date: report.date,
+          boxQty: report.boxQty,
+          rtvNoPoNo: report.rtvNoPoNo,
+          dnDate: report.dnDate,
+          rtvAmount: report.rtvAmount,
+          transporter: report.transporter,
+          noteNarration: report.noteNarration,
+          partyName: report.partyName,
+          state: report.state,
+          rows: report.rows,
+          approvedBy: report.approvedBy,
+          boardId: selectedBoardId,
+          updatedAt: serverTimestamp(),
+          userId: auth.currentUser.uid
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, draftPath);
+      } finally {
+        setIsSaving(false);
+      }
+    }, 1000); // Debounce saves
+
+    return () => clearTimeout(timer);
+  }, [report, selectedBoardId]);
+
+  // Save to permanent storage and Clear draft on successful sync
+  useEffect(() => {
+    if (syncStatus === 'success') {
+      savePermanently();
+      clearReport();
+    }
+  }, [syncStatus]);
+
+  const savePermanently = async () => {
+    if (!selectedBoardId || !auth.currentUser) return;
+    // We use qcNo as the ID for easy lookup, or we can use a composite ID
+    // User requested "access by QC number", so using qcNo as ID is good if it's unique
+    const reportPath = `qcReports/${report.qcNo}`;
+    try {
+      await setDoc(doc(db, reportPath), {
+        qcNo: report.qcNo,
+        lrNo: report.lrNo,
+        date: report.date,
+        boxQty: report.boxQty,
+        rtvNoPoNo: report.rtvNoPoNo,
+        dnDate: report.dnDate,
+        rtvAmount: report.rtvAmount,
+        transporter: report.transporter,
+        noteNarration: report.noteNarration,
+        partyName: report.partyName,
+        state: report.state,
+        rows: report.rows,
+        approvedBy: report.approvedBy,
+        boardId: selectedBoardId,
+        syncedAt: serverTimestamp(),
+        userId: auth.currentUser.uid
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, reportPath);
+    }
+  };
+
+  const clearReport = async () => {
+    if (!selectedBoardId) return;
+    const draftPath = `qcDrafts/${selectedBoardId}`;
+    try {
+      await deleteDoc(doc(db, draftPath));
+      setReport({
+        qcNo: 'QC',
+        lrNo: '',
+        date: new Date().toISOString().split('T')[0],
+        boxQty: '',
+        rtvNoPoNo: '',
+        dnDate: '',
+        rtvAmount: '',
+        transporter: '',
+        noteNarration: '',
+        partyName: '',
+        state: '',
+        rows: [],
+        approvedBy: 'Alpino / Yuvraj'
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, draftPath);
+    }
+  };
 
   const addSku = (skuMapping: SKUMapping) => {
     setReport({
@@ -750,7 +1459,15 @@ function QCReportView() {
           </div>
           <div>
             <span className="text-[9px] font-bold uppercase tracking-widest opacity-40 block">Board Context</span>
-            <span className="text-[10px] lg:text-xs font-black uppercase text-[#141414] truncate max-w-[150px] block">{boardData?.name || 'Local Mode'}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] lg:text-xs font-black uppercase text-[#141414] truncate max-w-[150px] block">{boardData?.name || 'Local Mode'}</span>
+              {isSaving && (
+                <div className="flex items-center gap-1 text-[8px] font-bold text-blue-600 uppercase animate-pulse">
+                  <RefreshCw size={8} className="animate-spin" />
+                  Saving...
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex gap-3 lg:gap-4">
@@ -761,7 +1478,14 @@ function QCReportView() {
             <Printer size={12} /> <span className="hidden sm:inline">Print Report</span><span className="sm:hidden">Print</span>
           </button>
           <button 
-            onClick={() => submitReport(report)}
+            onClick={async () => {
+              await submitReport(report);
+              if (syncStatus === 'success') {
+                // We'll clear it inside the submitReport success block actually, 
+                // but submitReport is in MondayProvider. 
+                // Let's add a clear trigger.
+              }
+            }}
             disabled={syncStatus === 'syncing' || report.rows.length === 0}
             className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 lg:px-8 py-2.5 lg:py-3 font-black uppercase tracking-[0.2em] text-[9px] lg:text-[10px] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50 ${
               syncStatus === 'success' ? 'bg-green-600 text-white' : 
@@ -774,13 +1498,13 @@ function QCReportView() {
              syncStatus === 'success' ? 'Synced to Monday' : 
              syncStatus === 'error' ? 'Retry Sync' : 'Sync to Monday'}
           </button>
-          
+
           <button 
-            onClick={logout}
-            className="flex items-center justify-center p-2 bg-gray-100 border border-[#141414] hover:bg-gray-200 transition-all text-red-600"
-            title="Reset Connection"
+            onClick={clearReport}
+            className="flex items-center justify-center p-2 bg-gray-100 border border-[#141414] hover:bg-red-500 hover:text-white transition-all text-red-600"
+            title="Clear Current Report"
           >
-            <LogOut size={16} />
+            <Trash2 size={16} />
           </button>
         </div>
       </div>
@@ -798,40 +1522,272 @@ function QCReportView() {
       <div className="flex-1 p-4 lg:p-8 print:p-0 overflow-y-auto custom-scrollbar">
         <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-4 lg:p-12 print:border-none print:shadow-none print:p-0">
           
-          {/* Header Metadata */}
-          <div className="grid grid-cols-2 md:grid-cols-4 border-2 border-[#141414] mb-4 lg:mb-8 divide-x-2 divide-y-2 md:divide-y-0 divide-[#141414]">
-            <div className="p-2 lg:p-3">
-              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">QC.NO-</label>
-              <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
-            </div>
-            <div className="p-2 lg:p-3">
-              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">LR NO-</label>
-              <input type="text" value={report.lrNo} onChange={e => setReport({...report, lrNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
-            </div>
-            <div className="p-2 lg:p-3 border-t-2 md:border-t-0">
-              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">DATE-</label>
-              <input type="date" value={report.date} onChange={e => setReport({...report, date: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
-            </div>
-            <div className="p-2 lg:p-3 border-t-2 md:border-t-0">
-              <label className="text-[8px] lg:text-[9px] font-bold uppercase block opacity-50 lg:mb-1">BOX QTY-</label>
-              <input type="text" value={report.boxQty} onChange={e => setReport({...report, boxQty: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none" />
-            </div>
-          </div>
-
-          <div className="text-center py-4 lg:py-6 mb-6 lg:mb-8 border-b-4 border-double border-[#141414]">
-            <h1 className="text-xl lg:text-3xl font-black uppercase tracking-[0.2em] lg:tracking-[0.3em] inline-block">
+          <div className="text-center py-4 lg:py-10 mb-6 lg:mb-8 border-b-4 border-double border-[#141414] relative overflow-hidden bg-gray-50/50">
+            <span className="absolute top-0 left-0 w-full h-[1px] bg-[#141414]/10" />
+            <h1 className="text-xl lg:text-4xl font-black uppercase tracking-[0.2em] lg:tracking-[0.4em] inline-block relative px-4">
+              <span className="absolute -left-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
               Sales Return QC Report (GRN)
+              <span className="absolute -right-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
             </h1>
+          </div>
+          
+          {/* Header Metadata */}
+          <div className="border-2 border-[#141414] mb-4 lg:mb-8 divide-y-2 divide-[#141414]">
+            {/* Row 1 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 divide-x-2 divide-[#141414]">
+              <div className="p-2 lg:p-3">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">QC.NO</label>
+                <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+              </div>
+              <div className="p-2 lg:p-3">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">LR NO</label>
+                <input type="text" value={report.lrNo} onChange={e => setReport({...report, lrNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+              </div>
+              <div className="p-2 lg:p-3">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">DATE</label>
+                <input type="date" value={report.date} onChange={e => setReport({...report, date: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+              </div>
+              <div className="p-2 lg:p-3">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">BOX QTY</label>
+                <input type="text" value={report.boxQty} onChange={e => setReport({...report, boxQty: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+              </div>
+            </div>
+
+            {/* Row 2 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 divide-x-2 divide-[#141414]">
+              <div className="p-2 lg:p-3">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV NO/PO NO</label>
+                <input type="text" value={report.rtvNoPoNo} onChange={e => setReport({...report, rtvNoPoNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+              </div>
+              <div className="p-2 lg:p-3">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">DN Date</label>
+                <input type="date" value={report.dnDate} onChange={e => setReport({...report, dnDate: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+              </div>
+              <div className="p-2 lg:p-3">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV Amount</label>
+                <input type="text" value={report.rtvAmount} onChange={e => setReport({...report, rtvAmount: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+              </div>
+              <div className="p-2 lg:p-3 relative group">
+                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">Transporter</label>
+                <div className="relative">
+                  <button 
+                    onClick={() => setShowTransporterMenu(!showTransporterMenu)}
+                    className="w-full font-mono text-xs lg:text-sm text-left focus:outline-none bg-transparent flex items-center justify-between"
+                  >
+                    <span className={report.transporter ? 'text-[#141414]' : 'opacity-30'}>
+                      {report.transporter || 'Select Transporter'}
+                    </span>
+                    <ChevronDown size={12} className={`transition-transform duration-200 ${showTransporterMenu ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  <AnimatePresence>
+                    {showTransporterMenu && (
+                      <>
+                        <motion.div 
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          className="fixed inset-0 z-40 bg-transparent"
+                          onClick={() => setShowTransporterMenu(false)}
+                        />
+                        <motion.div 
+                          initial={{ opacity: 0, y: 5 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 5 }}
+                          className="absolute left-0 top-full mt-1 w-full min-w-[160px] bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-50 max-h-48 overflow-y-auto custom-scrollbar"
+                        >
+                          <button
+                            onClick={() => {
+                              setReport({...report, transporter: ''});
+                              setShowTransporterMenu(false);
+                            }}
+                            className="w-full text-left px-3 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600 border-b border-[#141414]/10 transition-all opacity-50 hover:opacity-100"
+                          >
+                            Clear Selection
+                          </button>
+                          {TRANSPORTERS.map(t => (
+                            <button
+                              key={t}
+                              onClick={() => {
+                                setReport({...report, transporter: t});
+                                setShowTransporterMenu(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 font-mono text-xs transition-all hover:bg-[#141414] hover:text-white
+                                ${report.transporter === t ? 'bg-[#141414] text-white' : ''}`}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                        </motion.div>
+                      </>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
+            </div>
+
+            {/* Row 3 - Narration */}
+            <div className="p-2 lg:p-3">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">Note & Narration</label>
+              <textarea 
+                rows={2} 
+                value={report.noteNarration} 
+                onChange={e => setReport({...report, noteNarration: e.target.value})} 
+                className="w-full text-xs lg:text-sm focus:outline-none bg-transparent resize-none leading-tight" 
+                placeholder="Enter any additional notes..."
+              />
+            </div>
           </div>
 
           <div className="flex flex-col md:grid md:grid-cols-4 border-2 border-[#141414] mb-6 divide-y-2 md:divide-y-0 md:divide-x-2 divide-[#141414]">
-            <div className="md:col-span-3 p-3 lg:p-4 flex items-center gap-3 lg:gap-4">
+            <div className="md:col-span-3 p-3 lg:p-4 flex items-center gap-3 lg:gap-4 relative">
               <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">Party Name:</label>
-              <input type="text" value={report.partyName} onChange={e => setReport({...report, partyName: e.target.value})} className="w-full text-sm lg:text-base font-semibold focus:outline-none" />
+              <div className="flex-1 relative">
+                <input 
+                  type="text" 
+                  value={report.partyName} 
+                  onFocus={() => setShowPartyMenu(true)}
+                  onChange={e => {
+                    setReport({...report, partyName: e.target.value});
+                    setPartySearch(e.target.value);
+                    setShowPartyMenu(true);
+                  }} 
+                  className="w-full text-sm lg:text-base font-semibold focus:outline-none bg-transparent" 
+                  placeholder="Type to search or add party..."
+                />
+                
+                <AnimatePresence>
+                  {showPartyMenu && (
+                    <>
+                      <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-40"
+                        onClick={() => setShowPartyMenu(false)}
+                      />
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        className="absolute left-0 top-full mt-2 w-full max-h-60 bg-white border-2 border-[#141414] shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-50 overflow-y-auto custom-scrollbar"
+                      >
+                        {/* Add New Option */}
+                        {partySearch && !parties.find(p => p.toLowerCase() === partySearch.toLowerCase()) && (
+                          <button
+                            onClick={async () => {
+                              const newParty = partySearch.trim();
+                              await addNewParty(newParty);
+                              setReport({...report, partyName: newParty});
+                              setPartySearch('');
+                              setShowPartyMenu(false);
+                            }}
+                            className="w-full text-left px-4 py-3 bg-blue-50 hover:bg-blue-100 border-b-2 border-[#141414] transition-all group"
+                          >
+                            <span className="text-[9px] font-black uppercase tracking-[0.2em] text-blue-600 block mb-1">Add New Entity (Permanent)</span>
+                            <p className="text-sm font-black uppercase">{partySearch}</p>
+                          </button>
+                        )}
+
+                        {/* Filtered List */}
+                        {parties
+                          .filter(p => !partySearch || p.toLowerCase().includes(partySearch.toLowerCase()))
+                          .map(p => (
+                            <button
+                              key={p}
+                              onClick={() => {
+                                setReport({...report, partyName: p});
+                                setPartySearch('');
+                                setShowPartyMenu(false);
+                              }}
+                              className={`w-full text-left px-4 py-3 border-b border-[#141414]/10 last:border-0 transition-all hover:bg-[#141414] hover:text-white
+                                ${report.partyName === p ? 'bg-[#141414] text-white' : ''}`}
+                            >
+                              <p className="text-sm font-bold uppercase tracking-tight">{p}</p>
+                            </button>
+                          ))}
+                        
+                        {parties.filter(p => p.toLowerCase().includes(partySearch.toLowerCase())).length === 0 && !partySearch && (
+                          <div className="p-8 text-center bg-gray-50">
+                            <p className="text-[10px] font-black uppercase tracking-widest opacity-30">Type to explore entities...</p>
+                          </div>
+                        )}
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
-            <div className="p-3 lg:p-4 flex items-center gap-3 lg:gap-4">
+            <div className="p-3 lg:p-4 flex items-center gap-3 lg:gap-4 relative group">
               <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">State:</label>
-              <input type="text" value={report.state} onChange={e => setReport({...report, state: e.target.value})} className="w-full text-sm lg:text-base font-semibold focus:outline-none" />
+              <div className="flex-1 relative">
+                <button 
+                  onClick={() => setShowStateMenu(!showStateMenu)}
+                  className="w-full text-sm lg:text-base font-semibold text-left focus:outline-none bg-transparent flex items-center justify-between"
+                >
+                  <span className={report.state ? 'text-[#141414]' : 'opacity-30 uppercase'}>
+                    {report.state || 'Select State'}
+                  </span>
+                  <ChevronDown size={14} className={`transition-transform duration-200 ${showStateMenu ? 'rotate-180' : ''}`} />
+                </button>
+
+                <AnimatePresence>
+                  {showStateMenu && (
+                    <>
+                      <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-40 bg-transparent"
+                        onClick={() => {
+                          setShowStateMenu(false);
+                          setStateSearch('');
+                        }}
+                      />
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        className="absolute left-0 top-full mt-2 w-full min-w-[220px] bg-white border-2 border-[#141414] shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-50 max-h-72 flex flex-col"
+                      >
+                        <div className="p-3 border-b-2 border-[#141414] sticky top-0 bg-white z-10">
+                          <div className="relative">
+                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" />
+                            <input
+                              autoFocus
+                              type="text"
+                              placeholder="Search State..."
+                              value={stateSearch}
+                              onChange={e => setStateSearch(e.target.value)}
+                              className="w-full bg-[#141414]/5 border-none text-xs font-bold uppercase py-2 pl-10 pr-3 focus:outline-none placeholder:opacity-50"
+                            />
+                          </div>
+                        </div>
+                        <div className="overflow-y-auto custom-scrollbar flex-1">
+                          {INDIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).length === 0 ? (
+                            <div className="px-4 py-6 text-xs text-center opacity-40 font-bold uppercase tracking-widest">No states found</div>
+                          ) : (
+                            INDIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map(s => (
+                              <button
+                                key={s}
+                                onClick={() => {
+                                  setReport({...report, state: s});
+                                  setShowStateMenu(false);
+                                  setStateSearch('');
+                                }}
+                                className={`w-full text-left px-4 py-3 text-sm font-bold uppercase transition-all hover:bg-[#141414] hover:text-white
+                                  ${report.state === s ? 'bg-[#141414] text-white' : ''}`}
+                              >
+                                {s}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           </div>
 
@@ -1005,8 +1961,32 @@ function renderValue(val: any, col: Column) {
 // --- Main App ---
 
 function AppContent() {
-  const { token, selectedBoardId, loading, activeView } = useMonday();
+  const { 
+    token, setToken, region, setRegion, boards, loading, error, fetchBoards, 
+    selectedBoardId, setSelectedBoardId, boardData, fetchBoardDetails,
+    submitReport,
+    syncStatus,
+    syncError,
+    activeView,
+    setActiveView,
+    customEmbedUrls,
+    setCustomEmbedUrl,
+    logout
+  } = useMonday();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarMinimized, setSidebarMinimized] = useState(false);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (u) {
+        setUser(u);
+      } else {
+        signInAnonymously(auth).catch(console.error);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   if (!token || !selectedBoardId) {
     return <MondaySetup />;
@@ -1014,10 +1994,15 @@ function AppContent() {
 
   return (
     <div className="flex h-screen bg-[#E4E3E0] font-sans text-[#141414] print:block print:h-auto overflow-hidden">
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar 
+        isOpen={sidebarOpen} 
+        onClose={() => setSidebarOpen(false)} 
+        isMinimized={sidebarMinimized}
+        onToggleMinimize={() => setSidebarMinimized(!sidebarMinimized)}
+      />
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         {/* Mobile Header */}
-        <header className="lg:hidden bg-[#141414] text-white p-4 flex items-center justify-between sticky top-0 z-50">
+        <header className="lg:hidden bg-[#141414] text-white p-4 flex items-center justify-between sticky top-0 z-50 w-full">
           <button onClick={() => setSidebarOpen(true)} className="p-2 hover:bg-white/10 rounded transition-colors">
             <Menu size={20} />
           </button>
@@ -1026,7 +2011,7 @@ function AppContent() {
         </header>
 
         {!selectedBoardId ? (
-          <div className="flex-1 bg-white flex flex-col items-center justify-center p-8 lg:p-12 text-center relative overflow-hidden">
+          <div className="flex-1 bg-white flex flex-col items-center justify-center p-8 lg:p-12 text-center relative overflow-hidden w-full">
             <div className="w-20 h-20 lg:w-24 lg:h-24 border-4 border-[#141414] flex items-center justify-center mb-8 mx-auto shadow-[12px_12px_0px_0px_rgba(0,0,0,0.05)]">
               <Layout size={32} className="opacity-20 lg:size-[40]" />
             </div>
@@ -1036,17 +2021,431 @@ function AppContent() {
             </p>
           </div>
         ) : (
-          <div className="flex-1 overflow-hidden">
-            {activeView === 'builder' ? (
-              <QCReportView />
-            ) : activeView === 'monitor' ? (
-              <BoardLiveMonitor />
-            ) : (
-              <Dashboard />
-            )}
+          <div className="flex-1 overflow-hidden w-full flex justify-center">
+            <motion.div 
+              animate={{ 
+                maxWidth: sidebarMinimized ? 1400 : '100%',
+              }}
+              transition={SIDEBAR_TRANSITION}
+              className="h-full w-full"
+            >
+              {activeView === 'builder' ? (
+                <QCReportView />
+              ) : activeView === 'monitor' ? (
+                <BoardLiveMonitor />
+              ) : activeView === 'history' ? (
+                <QCHistoryView />
+              ) : (
+                <Dashboard />
+              )}
+            </motion.div>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function QCHistoryView() {
+  const [reports, setReports] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedReport, setSelectedReport] = useState<any | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      if (!auth.currentUser) return;
+      setLoading(true);
+      try {
+        const q = query(collection(db, 'qcReports'), orderBy('syncedAt', 'desc'));
+        const querySnapshot = await getDocs(q);
+        const fetchedReports = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setReports(fetchedReports);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, 'qcReports');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchHistory();
+  }, [auth.currentUser]);
+
+  const filteredReports = reports.filter(r => 
+    r.qcNo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    r.partyName?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredReports.length && filteredReports.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredReports.map(r => r.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ${selectedIds.size} reports from history? This action cannot be undone.`)) return;
+
+    setIsDeleting(true);
+    try {
+      const batch = writeBatch(db);
+      selectedIds.forEach(id => {
+        batch.delete(doc(db, 'qcReports', id));
+      });
+      await batch.commit();
+      
+      // Update local state
+      setReports(prev => prev.filter(r => !selectedIds.has(r.id)));
+      setSelectedIds(new Set());
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'qcReports (batch)');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleBulkDownload = () => {
+    if (selectedIds.size === 0) return;
+    
+    // For bulk download, we'll trigger individual downloads for now
+    // In a more complex app, we might want to generate a single ZIP or combined Excel
+    selectedIds.forEach(id => {
+      const report = reports.find(r => r.id === id);
+      if (report) {
+        exportToExcel(report);
+      }
+    });
+  };
+
+  const exportToExcel = (report: any) => {
+    const headerData = [
+      ["SALES RETURN QC REPORT (GRN)"],
+      ["QC NO", report.qcNo, "LR NO", report.lrNo, "DATE", report.date, "BOX QTY", report.boxQty],
+      ["RTV/PO", report.rtvNoPoNo, "DN DATE", report.dnDate, "AMOUNT", report.rtvAmount, "TRANSPORTER", report.transporter],
+      ["NOTE", report.noteNarration],
+      ["PARTY NAME", report.partyName, "STATE", report.state],
+      [""],
+      ["OLD SKU", "NEW SKU", "BILL QTY", "RECEIVED", "EXPIRED", "NOT RECEIVED", "REPAIRABLE", "NON-REPAIRABLE", "USE", "BATCH CODE", "MFG", "EXP"]
+    ];
+
+    const rowData = report.rows.map((row: any) => [
+      row.oldSku, row.newSku, row.billQtyUnit, row.receivedUnit, row.expiredUnit, row.notReceivedUnit,
+      row.damagesRepairable, row.rejectNonRepairable, row.use, row.batchCode, row.mfgDate, row.expDate
+    ]);
+
+    const footerData = [
+      [""],
+      ["APPROVED BY", report.approvedBy]
+    ];
+
+    const worksheet = XLSX.utils.aoa_to_sheet([...headerData, ...rowData, ...footerData]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "QC Report");
+    XLSX.writeFile(workbook, `QC_Report_${report.qcNo}.xlsx`);
+  };
+
+  return (
+    <div className="flex-1 bg-[#F5F4F0] overflow-hidden flex flex-col h-full">
+      <div className="p-6 lg:p-10 flex flex-col h-full">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
+          <div>
+            <h2 className="text-3xl font-black uppercase tracking-tight mb-2">QC Archive</h2>
+            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">System Record History (Synced to Monday)</p>
+          </div>
+          
+          <div className="relative w-full md:w-80">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" size={16} />
+            <input 
+              type="text"
+              placeholder="Search QC No or Party..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-white border-2 border-[#141414] py-3 pl-10 pr-4 text-xs font-bold uppercase focus:outline-none shadow-[4px_4px_0px_0px_rgba(20,20,20,0.1)] focus:shadow-none transition-all"
+            />
+          </div>
+        </div>
+
+        {/* Bulk Actions Header */}
+        <AnimatePresence>
+          {selectedIds.size > 0 && (
+            <motion.div 
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="mb-6 p-4 bg-[#141414] text-white flex flex-col md:flex-row items-center justify-between gap-4 shadow-[8px_8px_0px_0px_rgba(20,20,20,0.2)]"
+            >
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="checkbox" 
+                    checked={selectedIds.size === filteredReports.length && filteredReports.length > 0}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded-none bg-transparent border-2 border-white focus:ring-0 cursor-pointer"
+                  />
+                  <span className="text-[10px] font-black uppercase tracking-widest">{selectedIds.size} Records Selected</span>
+                </div>
+                <button 
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-[9px] uppercase font-bold opacity-60 hover:opacity-100"
+                >
+                  Deselect All
+                </button>
+              </div>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={handleBulkDownload}
+                  className="flex items-center gap-2 bg-white text-[#141414] px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:invert transition-all"
+                >
+                  <Download size={14} /> Download Selected
+                </button>
+                <button 
+                  onClick={handleBulkDelete}
+                  disabled={isDeleting}
+                  className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-red-700 transition-all disabled:opacity-50"
+                >
+                  <Trash2 size={14} /> {isDeleting ? 'Deleting...' : 'Delete Permanently'}
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          {loading ? (
+            <div className="h-full flex items-center justify-center">
+              <RefreshCw className="animate-spin text-[#141414]/20" size={40} />
+            </div>
+          ) : filteredReports.length > 0 ? (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 pb-8">
+              {filteredReports.map(report => (
+                <div 
+                  key={report.id}
+                  className={`bg-white border-2 border-[#141414] p-6 group hover:bg-[#141414] hover:text-white transition-all cursor-pointer relative overflow-hidden flex gap-4
+                    ${selectedIds.has(report.id) ? 'bg-[#141414]/5 border-dashed ring-2 ring-[#141414] ring-inset' : ''}`}
+                  onClick={() => setSelectedReport(report)}
+                >
+                  <div 
+                    className="flex-shrink-0 pt-1" 
+                    onClick={(e) => { e.stopPropagation(); toggleSelect(report.id); }}
+                  >
+                    <input 
+                      type="checkbox" 
+                      checked={selectedIds.has(report.id)}
+                      onChange={() => {}} // Controlled by click on parent div
+                      className="w-5 h-5 rounded-none border-2 border-[#141414] group-hover:border-white checked:bg-[#141414] group-hover:checked:bg-white focus:ring-0 cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="absolute right-0 top-0 w-24 h-24 bg-[#141414]/5 -translate-y-1/2 translate-x-1/2 rotate-45 group-hover:bg-white/10" />
+                    
+                    <div className="flex justify-between items-start mb-6">
+                      <div className="space-y-1">
+                        <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 group-hover:opacity-60">Record ID</span>
+                        <h4 className="text-xl font-black uppercase tracking-tight">{report.qcNo}</h4>
+                      </div>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); exportToExcel(report); }}
+                        className="p-3 bg-[#141414] text-white border border-white/20 hover:bg-white hover:text-[#141414] transition-all"
+                        title="Export to Excel"
+                      >
+                        <Download size={16} />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6 relative z-10">
+                      <div>
+                        <span className="text-[9px] font-black uppercase tracking-widest opacity-40 group-hover:opacity-60 block mb-1">Party Name</span>
+                        <p className="text-sm font-bold truncate">{report.partyName}</p>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-black uppercase tracking-widest opacity-40 group-hover:opacity-60 block mb-1">Date</span>
+                        <p className="text-sm font-mono">{report.date}</p>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-black uppercase tracking-widest opacity-40 group-hover:opacity-60 block mb-1">Items</span>
+                        <p className="text-sm font-bold">{report.rows?.length || 0} SKUs</p>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-black uppercase tracking-widest opacity-40 group-hover:opacity-60 block mb-1">Synced At</span>
+                        <p className="text-[10px] font-mono opacity-60">
+                          {report.syncedAt instanceof Timestamp ? report.syncedAt.toDate().toLocaleString() : 'N/A'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center opacity-20">
+              <History size={60} />
+              <p className="mt-4 font-black uppercase tracking-[0.3em]">No Records Found</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Detail Modal */}
+      <AnimatePresence>
+        {selectedReport && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 lg:p-10">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedReport(null)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white border-4 border-[#141414] w-full max-w-6xl max-h-full overflow-hidden flex flex-col z-10 shadow-[20px_20px_0px_0px_rgba(20,20,20,0.3)]"
+            >
+              <div className="p-6 border-b-2 border-[#141414] flex justify-between items-center bg-gray-50">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 bg-[#141414] text-white flex items-center justify-center">
+                    <FileText size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black uppercase tracking-tighter">QC Report Detail</h3>
+                    <p className="text-[10px] font-bold opacity-40 uppercase tracking-widest">{selectedReport.qcNo}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => exportToExcel(selectedReport)}
+                    className="flex items-center gap-2 px-6 py-2 bg-[#141414] text-white text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all"
+                  >
+                    <Download size={14} /> Export Excel
+                  </button>
+                  <button 
+                    onClick={() => setSelectedReport(null)}
+                    className="p-2 hover:bg-red-500 hover:text-white transition-all border border-[#141414]/10"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                <div className="border-2 border-[#141414] mb-8 divide-y-2 divide-[#141414]">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 divide-x-2 divide-[#141414]">
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">LR Number</span>
+                      <span className="font-mono font-bold">{selectedReport.lrNo}</span>
+                    </div>
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">Date</span>
+                      <span className="font-mono font-bold">{selectedReport.date}</span>
+                    </div>
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">Box Qty</span>
+                      <span className="font-mono font-bold">{selectedReport.boxQty}</span>
+                    </div>
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">Approved By</span>
+                      <span className="font-mono font-bold">{selectedReport.approvedBy}</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 divide-x-2 divide-[#141414]">
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">RTV/PO NO</span>
+                      <span className="font-mono font-bold">{selectedReport.rtvNoPoNo}</span>
+                    </div>
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">DN Date</span>
+                      <span className="font-mono font-bold">{selectedReport.dnDate}</span>
+                    </div>
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">RTV Amount</span>
+                      <span className="font-mono font-bold">{selectedReport.rtvAmount}</span>
+                    </div>
+                    <div className="p-4">
+                      <span className="text-[9px] font-black uppercase opacity-40 block mb-1">Transporter</span>
+                      <span className="font-mono font-bold">{selectedReport.transporter}</span>
+                    </div>
+                  </div>
+                  <div className="p-4">
+                    <span className="text-[9px] font-black uppercase opacity-40 block mb-1">Note & Narration</span>
+                    <p className="text-sm">{selectedReport.noteNarration || "N/A"}</p>
+                  </div>
+                </div>
+
+                <div className="mb-8">
+                  <div className="flex items-center gap-3 mb-4">
+                    <label className="text-[11px] font-black uppercase tracking-widest">Party Name:</label>
+                    <p className="text-lg font-black uppercase">{selectedReport.partyName}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <label className="text-[11px] font-black uppercase tracking-widest">State:</label>
+                    <p className="text-lg font-black uppercase">{selectedReport.state}</p>
+                  </div>
+                </div>
+
+                <div className="border-2 border-[#141414] overflow-x-auto">
+                  <table className="w-full border-collapse text-[10px] min-w-[1000px]">
+                    <thead>
+                      <tr className="bg-gray-100 font-black uppercase border-b-2 border-[#141414]">
+                        <th className="border-r-2 border-[#141414] p-3 text-left">SKU Mapping</th>
+                        <th className="border-r border-[#141414] p-3">Bill</th>
+                        <th className="border-r border-[#141414] p-3">Rcvd</th>
+                        <th className="border-r border-[#141414] p-3">Exp</th>
+                        <th className="border-r border-[#141414] p-3">Not Rcvd</th>
+                        <th className="border-r border-[#141414] p-3">Dmg(R)</th>
+                        <th className="border-r border-[#141414] p-3">Rej(NR)</th>
+                        <th className="border-r border-[#141414] p-3">Use</th>
+                        <th className="border-r border-[#141414] p-3">Batch</th>
+                        <th className="border-r border-[#141414] p-3">MFG</th>
+                        <th className="p-3">EXP</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedReport.rows?.map((row: any, i: number) => (
+                        <tr key={i} className="border-b border-[#141414]/10 hover:bg-gray-50">
+                          <td className="p-3 border-r-2 border-[#141414]">
+                            <div className="flex flex-col">
+                              <span className="font-black uppercase tracking-tight">{row.oldSku}</span>
+                              <span className="text-[8px] font-mono opacity-40">{row.newSku}</span>
+                            </div>
+                          </td>
+                          <td className="border-r border-[#141414] p-3 text-center font-bold">{row.billQtyUnit}</td>
+                          <td className="border-r border-[#141414] p-3 text-center font-bold">{row.receivedUnit}</td>
+                          <td className="border-r border-[#141414] p-3 text-center font-bold text-orange-600">{row.expiredUnit}</td>
+                          <td className="border-r border-[#141414] p-3 text-center font-bold">{row.notReceivedUnit}</td>
+                          <td className="border-r border-[#141414] p-3 text-center font-bold text-green-600">{row.damagesRepairable}</td>
+                          <td className="border-r border-[#141414] p-3 text-center font-bold text-red-600">{row.rejectNonRepairable}</td>
+                          <td className="border-r border-[#141414] p-3 text-center uppercase">{row.use}</td>
+                          <td className="border-r border-[#141414] p-3 text-center font-mono uppercase">{row.batchCode}</td>
+                          <td className="border-r border-[#141414] p-3 text-center">{row.mfgDate}</td>
+                          <td className="p-3 text-center">{row.expDate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1509,22 +2908,30 @@ function BoardLiveMonitor() {
   const { selectedBoardId, boardData, customEmbedUrls, setCustomEmbedUrl } = useMonday();
   const [isEditingEmbed, setIsEditingEmbed] = useState(false);
   const [tempUrl, setTempUrl] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
   
   const currentEmbedUrl = (selectedBoardId && customEmbedUrls[selectedBoardId]) 
     ? customEmbedUrls[selectedBoardId]
     : `https://view.monday.com/embed/${selectedBoardId}`;
 
-  const handleUpdateEmbed = (e: React.FormEvent) => {
+  const handleUpdateEmbed = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedBoardId && tempUrl.trim()) {
+      setIsSaving(true);
       // Extract URL from iframe if they pasted the whole block
       let url = tempUrl.trim();
       const match = url.match(/src="([^"]+)"/);
       if (match) url = match[1];
       
-      setCustomEmbedUrl(selectedBoardId, url);
-      setIsEditingEmbed(false);
-      setTempUrl('');
+      try {
+        await setCustomEmbedUrl(selectedBoardId, url);
+        setIsEditingEmbed(false);
+        setTempUrl('');
+      } catch (error) {
+        console.error("Error saving embed URL:", error);
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -1594,8 +3001,8 @@ function BoardLiveMonitor() {
                   className="w-full bg-white/10 border border-white/20 p-3 text-xs font-mono focus:outline-none focus:bg-white/20"
                 />
               </div>
-              <button type="submit" className="bg-white text-[#141414] px-8 py-3 font-black uppercase text-[10px] tracking-widest hover:invert transition-all h-[46px]">
-                Save Link
+              <button type="submit" disabled={isSaving} className="bg-white text-[#141414] px-8 py-3 font-black uppercase text-[10px] tracking-widest hover:invert transition-all h-[46px] disabled:opacity-50">
+                {isSaving ? 'Syncing...' : 'Save to System'}
               </button>
             </form>
           </motion.div>
@@ -1611,6 +3018,9 @@ function BoardLiveMonitor() {
             height="100%" 
             style={{ border: 0 }}
             title="Monday Board Monitor"
+            referrerPolicy="no-referrer"
+            sandbox="allow-forms allow-popups allow-scripts allow-same-origin allow-downloads"
+            loading="lazy"
           />
         </div>
       </div>
