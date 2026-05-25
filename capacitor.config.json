@@ -1,0 +1,8 @@
+{
+  "appId": "com.salesreturn.qc",
+  "appName": "Sales Return QC",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

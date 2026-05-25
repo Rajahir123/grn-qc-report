@@ -1,0 +1,17 @@
+{
+  "name": "Sales Return QC",
+  "short_name": "QC Report",
+  "description": "Sales Return QC Report (GRN) Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#141414",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1055/1055644.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

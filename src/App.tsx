@@ -27,9 +27,12 @@ import {
   Check,
   ArrowLeft,
   History,
-  Download
+  Download,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { jsPDF } from 'jspdf';
+import * as htmlToImage from 'html-to-image';
 import { SKUS, type SKUMapping } from './lib/skus';
 
 import { 
@@ -1400,6 +1403,7 @@ function QCReportView() {
 
   const [isSkuPickerOpen, setIsSkuPickerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const skipNextSave = useRef(false);
 
   // Load draft on mount or board change
@@ -1589,6 +1593,105 @@ function QCReportView() {
     }
   };
 
+  const handleShare = async () => {
+    const reportElement = document.getElementById('report-to-pdf');
+    if (!reportElement) return;
+
+    try {
+      setIsGeneratingPdf(true);
+      
+      // Force a desktop-like width for the capture to emulate "Print" layout
+      const originalWidth = reportElement.style.width;
+      const originalMaxWidth = reportElement.style.maxWidth;
+      const originalTransform = reportElement.style.transform;
+      const originalTransformOrigin = reportElement.style.transformOrigin;
+      const originalShadow = reportElement.style.boxShadow;
+      const originalBorder = reportElement.style.border;
+
+      // Apply print-like styles temporarily
+      reportElement.classList.remove('mobile-zoom-out');
+      reportElement.style.width = '1024px';
+      reportElement.style.maxWidth = 'none';
+      reportElement.style.boxShadow = 'none';
+      reportElement.style.border = 'none';
+      
+      // Use html-to-image to capture at this width
+      const imgData = await htmlToImage.toJpeg(reportElement, {
+        quality: 0.95,
+        backgroundColor: '#ffffff',
+        pixelRatio: 2,
+        // Ensure we capture the full height
+        canvasWidth: 1024,
+      });
+      
+      // Restore original styles
+      reportElement.classList.add('mobile-zoom-out');
+      reportElement.style.width = originalWidth;
+      reportElement.style.maxWidth = originalMaxWidth;
+      reportElement.style.transform = originalTransform;
+      reportElement.style.transformOrigin = originalTransformOrigin;
+      reportElement.style.boxShadow = originalShadow;
+      reportElement.style.border = originalBorder;
+
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      const imgProps = pdf.getImageProperties(imgData);
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const contentHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+      let heightLeft = contentHeight;
+      let position = 0;
+
+      // Add first page
+      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, contentHeight);
+      heightLeft -= pageHeight;
+
+      // Add additional pages if content exceeds standard A4 height
+      while (heightLeft > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, contentHeight);
+        heightLeft -= pageHeight;
+      }
+      
+      const pdfBlob = pdf.output('blob');
+      const filename = `QC_Report_${report.qcNo || 'Export'}.pdf`;
+      const file = new File([pdfBlob], filename, { type: 'application/pdf' });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `QC Report - ${report.qcNo}`,
+          text: `Sales Return QC Report (GRN) for ${report.partyName}`
+        });
+      } else {
+        // Fallback: Download
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Error sharing PDF:', err);
+        // Fallback to text share if files not supported
+        if (navigator.share) {
+          const text = `Sales Return QC Report (GRN)\nQC NO: ${report.qcNo}\nParty: ${report.partyName}`;
+          await navigator.share({ title: 'QC Report', text });
+        }
+      }
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
   return (
     <div className="flex-1 bg-[#F5F5F5] flex flex-col h-screen overflow-hidden font-sans print:block print:h-auto print:overflow-visible">
       {/* Action Header */}
@@ -1612,6 +1715,16 @@ function QCReportView() {
           </div>
         </div>
         <div className="flex gap-3 lg:gap-4">
+          <button 
+            onClick={handleShare}
+            disabled={isGeneratingPdf}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 border border-[#141414] font-bold uppercase tracking-widest text-[9px] lg:text-[10px] hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none bg-blue-50/50 disabled:opacity-50"
+            title="Share PDF Report"
+          >
+            {isGeneratingPdf ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
+            <span className="hidden sm:inline">{isGeneratingPdf ? 'Generating PDF...' : 'Share PDF Report'}</span>
+            <span className="sm:hidden">{isGeneratingPdf ? '...' : 'Share'}</span>
+          </button>
           <button 
             onClick={handlePrint}
             className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 border border-[#141414] font-bold uppercase tracking-widest text-[9px] lg:text-[10px] hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none"
@@ -1661,7 +1774,7 @@ function QCReportView() {
       )}
 
       <div className="flex-1 p-2 md:p-4 lg:p-8 print:p-0 overflow-y-auto custom-scrollbar">
-        <div className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] md:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-2 md:p-4 lg:p-12 print:border-none print:shadow-none print:p-0 relative mobile-zoom-out">
+        <div id="report-to-pdf" className="w-full max-w-5xl mx-auto bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] md:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] p-2 md:p-4 lg:p-12 print:border-none print:shadow-none print:p-0 relative mobile-zoom-out">
           
           <div className="text-center py-3 md:py-6 lg:py-10 mb-4 md:mb-6 lg:mb-8 border-b-4 border-double border-[#141414] relative overflow-hidden bg-gray-50/50">
             <span className="absolute top-0 left-0 w-full h-[1px] bg-[#141414]/10" />

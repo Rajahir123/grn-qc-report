@@ -1,6 +1,6 @@
 {
-  "name": "Monday Board Connect",
-  "description": "Connect and interact with your monday.com boards seamlessly.",
+  "name": "Sales Return QC",
+  "description": "Sales Return QC Report (GRN) Management with PDF sharing and mobile support.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
