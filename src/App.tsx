@@ -1585,42 +1585,31 @@ function QCReportView() {
     setReport({ ...report, rows: newRows });
   };
 
-  const handlePrint = () => {
-    try {
-      window.print();
-    } catch (e) {
-      alert("Please open the application in a new tab to use the print feature.");
-    }
-  };
-
-  const handleShare = async () => {
+  const generatePdf = async (): Promise<{ blob: Blob; base64: string; filename: string } | null> => {
     const reportElement = document.getElementById('report-to-pdf');
-    if (!reportElement) return;
+    if (!reportElement) return null;
 
+    // Force a desktop-like width for the capture to emulate "Print" layout
+    const originalWidth = reportElement.style.width;
+    const originalMaxWidth = reportElement.style.maxWidth;
+    const originalTransform = reportElement.style.transform;
+    const originalTransformOrigin = reportElement.style.transformOrigin;
+    const originalShadow = reportElement.style.boxShadow;
+    const originalBorder = reportElement.style.border;
+
+    // Apply print-like styles temporarily
+    reportElement.classList.remove('mobile-zoom-out');
+    reportElement.style.width = '1024px';
+    reportElement.style.maxWidth = 'none';
+    reportElement.style.boxShadow = 'none';
+    reportElement.style.border = 'none';
+    
     try {
-      setIsGeneratingPdf(true);
-      
-      // Force a desktop-like width for the capture to emulate "Print" layout
-      const originalWidth = reportElement.style.width;
-      const originalMaxWidth = reportElement.style.maxWidth;
-      const originalTransform = reportElement.style.transform;
-      const originalTransformOrigin = reportElement.style.transformOrigin;
-      const originalShadow = reportElement.style.boxShadow;
-      const originalBorder = reportElement.style.border;
-
-      // Apply print-like styles temporarily
-      reportElement.classList.remove('mobile-zoom-out');
-      reportElement.style.width = '1024px';
-      reportElement.style.maxWidth = 'none';
-      reportElement.style.boxShadow = 'none';
-      reportElement.style.border = 'none';
-      
       // Use html-to-image to capture at this width
       const imgData = await htmlToImage.toJpeg(reportElement, {
         quality: 0.95,
         backgroundColor: '#ffffff',
         pixelRatio: 2,
-        // Ensure we capture the full height
         canvasWidth: 1024,
       });
       
@@ -1661,8 +1650,106 @@ function QCReportView() {
       
       const pdfBlob = pdf.output('blob');
       const filename = `QC_Report_${report.qcNo || 'Export'}.pdf`;
-      const file = new File([pdfBlob], filename, { type: 'application/pdf' });
 
+      // Convert to base64
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve({
+            blob: pdfBlob,
+            base64: reader.result as string,
+            filename
+          });
+        };
+        reader.readAsDataURL(pdfBlob);
+      });
+    } catch (e) {
+      console.error("Error generating PDF:", e);
+      // Restore original styles in case of failure
+      reportElement.classList.add('mobile-zoom-out');
+      reportElement.style.width = originalWidth;
+      reportElement.style.maxWidth = originalMaxWidth;
+      reportElement.style.transform = originalTransform;
+      reportElement.style.transformOrigin = originalTransformOrigin;
+      reportElement.style.boxShadow = originalShadow;
+      reportElement.style.border = originalBorder;
+      throw e;
+    }
+  };
+
+  const handlePrint = async () => {
+    const isMedianApp = !!((window as any).gonative || (window as any).median);
+    const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    if (!isMedianApp && !isMobileDevice) {
+      try {
+        window.print();
+        return;
+      } catch (e) {
+        console.error('Window print failed, falling back to PDF generation:', e);
+      }
+    }
+
+    try {
+      setIsGeneratingPdf(true);
+      const pdfData = await generatePdf();
+      if (!pdfData) return;
+
+      const { blob, base64, filename } = pdfData;
+
+      // 1. If GoNative / Median Printer is configured/activated
+      const printer = (window as any).gonative?.printer || (window as any).median?.printer;
+      if (printer && typeof printer.print === 'function') {
+        printer.print({ url: base64 });
+        return;
+      }
+
+      // 2. If GoNative / Median Share is active (as sharing opens native menu containing print)
+      const share = (window as any).gonative?.share || (window as any).median?.share;
+      if (share && typeof share.sharePage === 'function') {
+        share.sharePage({ url: base64 });
+        return;
+      }
+
+      // 3. Fallback to HTML5 sharing or base64 download if on generic mobile WebView
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Print QC Report - ${report.qcNo}`,
+          text: `Sales Return QC Report (GRN) for ${report.partyName}`
+        });
+      } else {
+        const link = document.createElement('a');
+        link.href = base64;
+        link.download = filename;
+        link.click();
+      }
+    } catch (err) {
+      console.error('Error during printing/generating PDF:', err);
+      alert("Failed to initiate print. Sharing or downloading the PDF to print instead.");
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  const handleShare = async () => {
+    try {
+      setIsGeneratingPdf(true);
+      const pdfData = await generatePdf();
+      if (!pdfData) return;
+
+      const { blob, base64, filename } = pdfData;
+
+      // 1. If GoNative / Median share bridge is present, use it for direct native sharing
+      const share = (window as any).gonative?.share || (window as any).median?.share;
+      if (share && typeof share.sharePage === 'function') {
+        share.sharePage({ url: base64 });
+        return;
+      }
+
+      // 2. Fallback to standard HTML5 navigator.share
+      const file = new File([blob], filename, { type: 'application/pdf' });
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
@@ -1670,18 +1757,15 @@ function QCReportView() {
           text: `Sales Return QC Report (GRN) for ${report.partyName}`
         });
       } else {
-        // Fallback: Download
-        const url = URL.createObjectURL(pdfBlob);
+        // 3. Fallback to base64 download (which GoNative intercepts successfully for WebView downloads)
         const link = document.createElement('a');
-        link.href = url;
+        link.href = base64;
         link.download = filename;
         link.click();
-        URL.revokeObjectURL(url);
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         console.error('Error sharing PDF:', err);
-        // Fallback to text share if files not supported
         if (navigator.share) {
           const text = `Sales Return QC Report (GRN)\nQC NO: ${report.qcNo}\nParty: ${report.partyName}`;
           await navigator.share({ title: 'QC Report', text });
@@ -1727,9 +1811,13 @@ function QCReportView() {
           </button>
           <button 
             onClick={handlePrint}
-            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 border border-[#141414] font-bold uppercase tracking-widest text-[9px] lg:text-[10px] hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none"
+            disabled={isGeneratingPdf}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 border border-[#141414] font-bold uppercase tracking-widest text-[9px] lg:text-[10px] hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none disabled:opacity-50"
+            title="Print PDF Report"
           >
-            <Printer size={12} /> <span className="hidden sm:inline">Print Report</span><span className="sm:hidden">Print</span>
+            {isGeneratingPdf ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
+            <span className="hidden sm:inline">{isGeneratingPdf ? 'Generating PDF...' : 'Print Report'}</span>
+            <span className="sm:hidden">{isGeneratingPdf ? '...' : 'Print'}</span>
           </button>
           <button 
             onClick={async () => {
