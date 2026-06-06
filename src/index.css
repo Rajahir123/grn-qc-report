@@ -26,3 +26,64 @@
     background: #333;
   }
 }
+
+/* Print & PDF Generation layout overrides to force perfect desktop formatting on any viewport */
+.is-generating-pdf {
+  width: 1024px !important;
+  max-width: none !important;
+  padding: 3rem !important; /* Forces lg:p-12 */
+  box-shadow: none !important;
+  border-width: 2px !important;
+  border-color: #141414 !important;
+}
+
+.is-generating-pdf h1 {
+  font-size: 1.875rem !important; /* lg:text-3xl / 4xl */
+  letter-spacing: 0.3em !important; /* lg:tracking-[0.3em] */
+}
+
+/* Force Row 1 & 2 metadata grid to 4 columns always */
+.is-generating-pdf .grid-cols-2 {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+/* Force signature, transporter dropdowns and controls behaviour on PDF */
+
+/* Force the signature row to be a single horizontal row */
+.is-generating-pdf .flex-col.sm\:flex-row {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: space-between !important;
+  align-items: flex-end !important;
+}
+
+.is-generating-pdf .lg\:p-4 {
+  padding: 1rem !important;
+}
+
+.is-generating-pdf .lg\:w-48 {
+  width: 12rem !important;
+}
+
+.is-generating-pdf .lg\:min-h-\[80px\] {
+  min-height: 80px !important;
+}
+
+.is-generating-pdf .sm\:w-64 {
+  width: 16rem !important;
+}
+
+.is-generating-pdf .text-right.sm\:text-right {
+  text-align: right !important;
+}
+
+/* Hide Chevrons and Row Deletions in the PDF capture */
+.is-generating-pdf svg.lucide-chevron-down {
+  display: none !important;
+}
+
+.is-generating-pdf .print\:hidden {
+  display: none !important;
+}
+

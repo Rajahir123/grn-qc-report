@@ -567,22 +567,60 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         return (title.includes('invoice') || title.includes('lr') || title.includes('qc')) && !title.includes('status') && c.type !== 'status' && c.type !== 'people';
       });
 
+      const boxQtyCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title.includes('number of box') || 
+               title.includes('no of box') || 
+               title.includes('no. of box') || 
+               title.includes('box qty') || 
+               title.includes('box quantity') || 
+               title.includes('number of boxes') || 
+               title.includes('no. of boxes') || 
+               title.includes('no of boxes');
+      }) || boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title.includes('box') && !title.includes('category') && c.type !== 'status' && c.type !== 'dropdown';
+      });
+
+      const lrNoCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title === 'lr number' || 
+               title === 'lr no' || 
+               title === 'lr_no' || 
+               title === 'lrno' || 
+               title === 'lr';
+      }) || boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return (title.includes('lr number') || title.includes('lr no') || title.includes('lr_no') || title.includes('lrno')) && 
+               !title.includes('invoice') && !title.includes('status') && c.type !== 'status' && c.type !== 'people';
+      });
+
       const itemName = `Report from ${report.partyName || 'Vendor'} - ${report.lrNo || 'N/A'} - ${report.qcNo || 'N/A'}`.substring(0, 250);
       
       const columnValues: Record<string, any> = {};
       
       const setColValue = (col: any, value: any) => {
-        if (!col || !value) return;
+        if (!col || value === undefined || value === null || value === '') return;
+        const skipTypes = [
+          'formula', 'lookup', 'mirror', 'progress', 'dependency', 
+          'color_picker', 'people', 'multiple-person', 'link', 
+          'creation_log', 'last_updated', 'file', 'subtasks', 'button', 'tags'
+        ];
+        if (skipTypes.includes(col.type)) return;
+
         if (col.type === 'status') {
           columnValues[col.id] = { label: String(value) };
         } else if (col.type === 'dropdown') {
           columnValues[col.id] = { labels: [String(value)] };
         } else if (col.type === 'numbers') {
-          columnValues[col.id] = String(value).replace(/[^0-9.]/g, '');
+          const cleanNum = String(value).replace(/[^0-9.-]/g, '');
+          if (cleanNum !== '') {
+            columnValues[col.id] = cleanNum;
+          }
         } else if (col.type === 'date') {
           columnValues[col.id] = { date: String(value) };
-        } else if (col.type === 'color_picker') {
-           // Skip, otherwise 500
+        } else if (col.type === 'long_text' || col.type === 'long-text') {
+          columnValues[col.id] = { text: String(value) };
         } else {
           columnValues[col.id] = String(value);
         }
@@ -639,6 +677,14 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       const skipTypes = ['formula', 'lookup', 'mirror', 'progress', 'dependency'];
       if (invoiceCol && report.lrNo && !skipTypes.includes(invoiceCol.type)) {
         setColValue(invoiceCol, report.lrNo);
+      }
+
+      if (lrNoCol && report.lrNo && !skipTypes.includes(lrNoCol.type)) {
+        setColValue(lrNoCol, report.lrNo);
+      }
+
+      if (boxQtyCol && report.boxQty) {
+        setColValue(boxQtyCol, report.boxQty);
       }
 
       const mutation = `
@@ -1350,7 +1396,7 @@ function TabButton({ active, onClick, isMinimized, icon, label }: any) {
 function QCReportView() {
   const { submitReport, syncStatus, syncError, boardData, logout, selectedBoardId } = useMonday();
   const [report, setReport] = useState<QCReport>({
-    qcNo: 'QC',
+    qcNo: 'QC-',
     lrNo: '',
     date: new Date().toISOString().split('T')[0],
     boxQty: '',
@@ -1534,7 +1580,7 @@ function QCReportView() {
     try {
       await deleteDoc(doc(db, draftPath));
       setReport({
-        qcNo: 'QC',
+        qcNo: 'QC-',
         lrNo: '',
         date: new Date().toISOString().split('T')[0],
         boxQty: '',
@@ -1589,38 +1635,21 @@ function QCReportView() {
     const reportElement = document.getElementById('report-to-pdf');
     if (!reportElement) return null;
 
-    // Force a desktop-like width for the capture to emulate "Print" layout
-    const originalWidth = reportElement.style.width;
-    const originalMaxWidth = reportElement.style.maxWidth;
-    const originalTransform = reportElement.style.transform;
-    const originalTransformOrigin = reportElement.style.transformOrigin;
-    const originalShadow = reportElement.style.boxShadow;
-    const originalBorder = reportElement.style.border;
-
-    // Apply print-like styles temporarily
+    // Apply print/PDF styles temporarily via CSS classes
+    reportElement.classList.add('is-generating-pdf');
     reportElement.classList.remove('mobile-zoom-out');
-    reportElement.style.width = '1024px';
-    reportElement.style.maxWidth = 'none';
-    reportElement.style.boxShadow = 'none';
-    reportElement.style.border = 'none';
     
     try {
-      // Use html-to-image to capture at this width
+      // Use html-to-image to capture at this beautiful overridden width (1024px)
       const imgData = await htmlToImage.toJpeg(reportElement, {
-        quality: 0.95,
+        quality: 0.98,
         backgroundColor: '#ffffff',
-        pixelRatio: 2,
-        canvasWidth: 1024,
+        pixelRatio: 2.5, // Slightly higher for premium, ultra-crisp presentation
       });
       
-      // Restore original styles
+      // Restore original screen-view classes immediately
+      reportElement.classList.remove('is-generating-pdf');
       reportElement.classList.add('mobile-zoom-out');
-      reportElement.style.width = originalWidth;
-      reportElement.style.maxWidth = originalMaxWidth;
-      reportElement.style.transform = originalTransform;
-      reportElement.style.transformOrigin = originalTransformOrigin;
-      reportElement.style.boxShadow = originalShadow;
-      reportElement.style.border = originalBorder;
 
       const pdf = new jsPDF({
         orientation: 'p',
@@ -1629,24 +1658,28 @@ function QCReportView() {
       });
 
       const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const contentHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // typically 210mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // typically 297mm
 
-      let heightLeft = contentHeight;
-      let position = 0;
+      // Configure generous 8mm printable margins around the report card
+      const margin = 8;
+      const maxPdfWidth = pdfWidth - (margin * 2);
+      const maxPdfHeight = pdfHeight - (margin * 2);
 
-      // Add first page
-      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, contentHeight);
-      heightLeft -= pageHeight;
+      // Compute optimal scale factor to fit exactly 1 page
+      const ratioWidth = maxPdfWidth / imgProps.width;
+      const ratioHeight = maxPdfHeight / imgProps.height;
+      const scale = Math.min(ratioWidth, ratioHeight);
 
-      // Add additional pages if content exceeds standard A4 height
-      while (heightLeft > 0) {
-        position -= pageHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, contentHeight);
-        heightLeft -= pageHeight;
-      }
+      const drawnWidth = imgProps.width * scale;
+      const drawnHeight = imgProps.height * scale;
+
+      // Center the report on the single page
+      const xOffset = margin + (maxPdfWidth - drawnWidth) / 2;
+      const yOffset = margin + (maxPdfHeight - drawnHeight) / 2;
+
+      // Add image to the single A4 page
+      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, drawnWidth, drawnHeight);
       
       const pdfBlob = pdf.output('blob');
       const filename = `QC_Report_${report.qcNo || 'Export'}.pdf`;
@@ -1665,14 +1698,9 @@ function QCReportView() {
       });
     } catch (e) {
       console.error("Error generating PDF:", e);
-      // Restore original styles in case of failure
+      // Restore original classes in case of failure
+      reportElement.classList.remove('is-generating-pdf');
       reportElement.classList.add('mobile-zoom-out');
-      reportElement.style.width = originalWidth;
-      reportElement.style.maxWidth = originalMaxWidth;
-      reportElement.style.transform = originalTransform;
-      reportElement.style.transformOrigin = originalTransformOrigin;
-      reportElement.style.boxShadow = originalShadow;
-      reportElement.style.border = originalBorder;
       throw e;
     }
   };
@@ -1868,108 +1896,110 @@ function QCReportView() {
             <span className="absolute top-0 left-0 w-full h-[1px] bg-[#141414]/10" />
             <h1 className="text-base md:text-xl lg:text-4xl font-black uppercase tracking-[0.1em] md:tracking-[0.2em] lg:tracking-[0.4em] inline-block relative px-2 md:px-4">
               <span className="absolute -left-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
-              Sales Return QC Report (GRN)
+              Return QC Report (GRN)
               <span className="absolute -right-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
             </h1>
           </div>
           
           {/* Header Metadata */}
-          <div className="border-2 border-[#141414] mb-4 lg:mb-8 divide-y-2 divide-[#141414]">
-            {/* Row 1 */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 divide-x-2 divide-[#141414] border-b-2 border-[#141414] sm:border-none">
-              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">QC.NO</label>
-                <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
-              </div>
-              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">LR NO</label>
-                <input type="text" value={report.lrNo} onChange={e => setReport({...report, lrNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
-              </div>
-              <div className="p-2 lg:p-3">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">DATE</label>
-                <input type="date" value={report.date} onChange={e => setReport({...report, date: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
-              </div>
-              <div className="p-2 lg:p-3">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">BOX QTY</label>
-                <input type="text" value={report.boxQty} onChange={e => setReport({...report, boxQty: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
-              </div>
+          <div className="border-2 border-[#141414] mb-4 lg:mb-8 bg-white grid grid-cols-2 sm:grid-cols-4 col-span-full">
+            {/* Cell 1: QC.NO */}
+            <div className="p-2 lg:p-3 border-b-2 border-r-2 border-[#141414]">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">QC.NO</label>
+              <input type="text" value={report.qcNo} onChange={e => setReport({...report, qcNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+            </div>
+            {/* Cell 2: LR NO */}
+            <div className="p-2 lg:p-3 border-b-2 border-[#141414] sm:border-r-2">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">LR NO</label>
+              <input type="text" value={report.lrNo} onChange={e => setReport({...report, lrNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+            </div>
+            {/* Cell 3: DATE */}
+            <div className="p-2 lg:p-3 border-b-2 border-r-2 border-[#141414]">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">DATE</label>
+              <input type="date" value={report.date} onChange={e => setReport({...report, date: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+            </div>
+            {/* Cell 4: BOX QTY */}
+            <div className="p-2 lg:p-3 border-b-2 border-[#141414]">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">BOX QTY</label>
+              <input type="text" value={report.boxQty} onChange={e => setReport({...report, boxQty: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
             </div>
 
-            {/* Row 2 */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 divide-x-2 divide-[#141414] border-b-2 border-[#141414] sm:border-none">
-              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV NO/PO NO</label>
-                <input type="text" value={report.rtvNoPoNo} onChange={e => setReport({...report, rtvNoPoNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
-              </div>
-              <div className="p-2 lg:p-3 pb-2 border-b-2 sm:border-none border-[#141414]">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">DN Date</label>
-                <input type="date" value={report.dnDate} onChange={e => setReport({...report, dnDate: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
-              </div>
-              <div className="p-2 lg:p-3">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV Amount</label>
-                <input type="text" value={report.rtvAmount} onChange={e => setReport({...report, rtvAmount: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
-              </div>
-              <div className="p-2 lg:p-3 relative group">
-                <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">Transporter</label>
-                <div className="relative">
-                  <button 
-                    onClick={() => setShowTransporterMenu(!showTransporterMenu)}
-                    className="w-full font-mono text-xs lg:text-sm text-left focus:outline-none bg-transparent flex items-center justify-between"
-                  >
-                    <span className={report.transporter ? 'text-[#141414]' : 'opacity-30'}>
-                      {report.transporter || 'Select Transporter'}
-                    </span>
-                    <ChevronDown size={12} className={`transition-transform duration-200 ${showTransporterMenu ? 'rotate-180' : ''}`} />
-                  </button>
+            {/* Cell 5: RTV NO/PO NO */}
+            <div className="p-2 lg:p-3 border-b-2 sm:border-b-0 border-r-2 border-[#141414]">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV NO/PO NO</label>
+              <input type="text" value={report.rtvNoPoNo} onChange={e => setReport({...report, rtvNoPoNo: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+            </div>
+            {/* Cell 6: DN Date */}
+            <div className="p-2 lg:p-3 border-b-2 sm:border-b-0 border-[#141414] sm:border-r-2">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">DN Date</label>
+              <input type="date" value={report.dnDate} onChange={e => setReport({...report, dnDate: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+            </div>
+            {/* Cell 7: RTV Amount */}
+            <div className="p-2 lg:p-3 border-b-2 sm:border-b-0 border-r-2 border-[#141414]">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">RTV Amount</label>
+              <input type="text" value={report.rtvAmount} onChange={e => setReport({...report, rtvAmount: e.target.value})} className="w-full font-mono text-xs lg:text-sm focus:outline-none bg-transparent" />
+            </div>
+            {/* Cell 8: Transporter */}
+            <div className="p-2 lg:p-3 border-b-2 sm:border-b-0 border-[#141414] relative group">
+              <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">Transporter</label>
+              <div className="relative">
+                <button 
+                  onClick={() => setShowTransporterMenu(!showTransporterMenu)}
+                  className="w-full font-mono text-xs lg:text-sm text-left focus:outline-none bg-transparent flex items-center justify-between"
+                >
+                  <span className={report.transporter ? 'text-[#141414]' : 'opacity-30'}>
+                    {report.transporter || 'Select Transporter'}
+                  </span>
+                  <ChevronDown size={12} className={`transition-transform duration-200 ${showTransporterMenu ? 'rotate-180' : ''}`} />
+                </button>
 
-                  <AnimatePresence>
-                    {showTransporterMenu && (
-                      <>
-                        <motion.div 
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          className="fixed inset-0 z-40 bg-transparent"
-                          onClick={() => setShowTransporterMenu(false)}
-                        />
-                        <motion.div 
-                          initial={{ opacity: 0, y: 5 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: 5 }}
-                          className="absolute left-0 top-full mt-1 w-full min-w-[160px] bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-50 max-h-48 overflow-y-auto custom-scrollbar"
+                <AnimatePresence>
+                  {showTransporterMenu && (
+                    <>
+                      <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-40 bg-transparent"
+                        onClick={() => setShowTransporterMenu(false)}
+                      />
+                      <motion.div 
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 5 }}
+                        className="absolute left-0 top-full mt-1 w-full min-w-[160px] bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-50 max-h-48 overflow-y-auto custom-scrollbar"
+                      >
+                        <button
+                          onClick={() => {
+                            setReport({...report, transporter: ''});
+                            setShowTransporterMenu(false);
+                          }}
+                          className="w-full text-left px-3 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600 border-b border-[#141414]/10 transition-all opacity-50 hover:opacity-100"
                         >
+                          Clear Selection
+                        </button>
+                        {TRANSPORTERS.map(t => (
                           <button
+                            key={t}
                             onClick={() => {
-                              setReport({...report, transporter: ''});
+                              setReport({...report, transporter: t});
                               setShowTransporterMenu(false);
                             }}
-                            className="w-full text-left px-3 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600 border-b border-[#141414]/10 transition-all opacity-50 hover:opacity-100"
+                            className={`w-full text-left px-3 py-2 font-mono text-xs transition-all hover:bg-[#141414] hover:text-white
+                              ${report.transporter === t ? 'bg-[#141414] text-white' : ''}`}
                           >
-                            Clear Selection
+                            {t}
                           </button>
-                          {TRANSPORTERS.map(t => (
-                            <button
-                              key={t}
-                              onClick={() => {
-                                setReport({...report, transporter: t});
-                                setShowTransporterMenu(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 font-mono text-xs transition-all hover:bg-[#141414] hover:text-white
-                                ${report.transporter === t ? 'bg-[#141414] text-white' : ''}`}
-                            >
-                              {t}
-                            </button>
-                          ))}
-                        </motion.div>
-                      </>
-                    )}
-                  </AnimatePresence>
-                </div>
+                        ))}
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
 
-            {/* Row 3 - Narration */}
-            <div className="p-2 lg:p-3">
+            {/* Note & Narration Row */}
+            <div className="col-span-full p-2 lg:p-3 border-t-2 border-[#141414]">
               <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">Note & Narration</label>
               <textarea 
                 rows={2} 
@@ -1981,8 +2011,8 @@ function QCReportView() {
             </div>
           </div>
 
-          <div className="flex flex-col lg:grid lg:grid-cols-4 border-2 border-[#141414] mb-4 md:mb-6 divide-y-2 lg:divide-y-0 lg:divide-x-2 divide-[#141414]">
-            <div className="lg:col-span-3 p-2 lg:p-4 flex items-center gap-2 lg:gap-4 relative">
+          <div className="grid grid-cols-1 lg:grid-cols-4 border-2 border-[#141414] mb-4 md:mb-6 bg-white">
+            <div className="lg:col-span-3 p-2 lg:p-4 flex items-center gap-2 lg:gap-4 relative border-b-2 lg:border-b-0 lg:border-r-2 border-[#141414]">
               <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">Party Name:</label>
               <div className="flex-1 relative">
                 <input 
@@ -2138,72 +2168,77 @@ function QCReportView() {
             <table className="w-full border-collapse text-[9px] lg:text-[10px] min-w-[800px]">
               <thead>
                 <tr className="bg-gray-100 font-bold uppercase border-b-2 border-[#141414]">
-                  <th rowSpan={2} className="border-r-2 border-[#141414] p-2 min-w-[80px]">Old SKU</th>
-                  <th rowSpan={2} className="border-r-2 border-[#141414] p-2 min-w-[100px]">New SKU</th>
-                  <th className="border-r border-[#141414] p-1">Bill Qty</th>
-                  <th className="border-r border-[#141414] p-1">Received</th>
-                  <th className="border-r border-[#141414] p-1 text-orange-600">Expired</th>
-                  <th className="border-r border-[#141414] p-1">Not Received</th>
-                  <th colSpan={2} className="border-r border-[#141414] p-1">Status</th>
-                  <th rowSpan={2} className="border-r border-[#141414] p-1">Use</th>
-                  <th rowSpan={2} className="border-r border-[#141414] p-1 min-w-[80px]">Batch Code</th>
-                  <th className="border-r border-[#141414] p-1">MFG</th>
-                  <th className="p-1">EXP</th>
+                  <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-2 text-center w-10">S.No</th>
+                  <th rowSpan={2} className="border-r-2 border-b-2 border-[#141414] p-2 min-w-[80px]">Old SKU</th>
+                  <th rowSpan={2} className="border-r-2 border-b-2 border-[#141414] p-2 min-w-[100px]">New SKU</th>
+                  <th className="border-r border-b border-[#141414] p-1 text-center">Bill Qty</th>
+                  <th className="border-r border-b border-[#141414] p-1 text-center">Received</th>
+                  <th className="border-r border-b border-[#141414] p-1 text-center">Not Received</th>
+                  <th className="border-r border-b border-[#141414] p-1 text-center text-orange-600 bg-orange-50/50">Expired</th>
+                  <th colSpan={2} className="border-r border-b border-[#141414] p-1 text-center">DAMAGE ITEM</th>
+                  <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-1 text-center">Use</th>
+                  <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-1 min-w-[80px] text-center">Batch Code</th>
+                  <th className="border-r border-b border-[#141414] p-1 text-center">MFG</th>
+                  <th className="border-b border-[#141414] p-1 text-center">EXP</th>
                 </tr>
                 <tr className="bg-gray-100 text-[8px] border-b-2 border-[#141414]">
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-60">Unit</th>
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-orange-50/50">Unit</th>
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-60">Unit</th>
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-60">Unit</th>
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-green-50/50">Repairable</th>
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-red-50/50">Non Repairable</th>
-                  <th className="border-r border-[#141414] p-1 uppercase opacity-40">Date</th>
-                  <th className="uppercase opacity-40">Date</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 text-center">Unit</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 text-center">Unit</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 text-center">Unit</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-orange-100/50 text-orange-700 text-center font-bold">Unit</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-green-50/50 text-center">Repairable</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-red-50/50 text-center">Non Repairable</th>
+                  <th className="border-r border-[#141414] p-1 uppercase opacity-40 text-center">Date</th>
+                  <th className="uppercase opacity-40 text-center">Date</th>
                 </tr>
               </thead>
               <tbody>
                 {report.rows.length > 0 ? (
                   report.rows.map((row, idx) => (
-                    <tr key={idx} className="border-b border-[#141414] hover:bg-black/5 group">
-                      <td className="p-2 border-r-2 border-[#141414] font-bold uppercase relative bg-gray-50/30">
+                    <tr key={idx} className="hover:bg-black/5 group">
+                      <td className="p-2 border-r border-b border-[#141414] font-black text-center font-mono text-gray-500 bg-gray-50/50 w-10">
+                        {idx + 1}
+                      </td>
+                      <td className="p-2 border-r-2 border-b border-[#141414] font-bold uppercase relative bg-gray-50/30">
                         {row.oldSku}
                         <button onClick={() => removeRow(idx)} className="absolute right-1 top-1/2 -translate-y-1/2 text-red-500 opacity-0 group-hover:opacity-100 print:hidden p-1">
                           <Trash2 size={12} />
                         </button>
                       </td>
-                      <td className="border-r-2 border-[#141414] font-mono text-[9px] uppercase">{row.newSku}</td>
-                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.billQtyUnit || ''} onChange={e => updateRow(idx, { billQtyUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.receivedUnit || ''} onChange={e => updateRow(idx, { receivedUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0 bg-orange-50/20"><input type="number" value={row.expiredUnit || ''} onChange={e => updateRow(idx, { expiredUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent font-bold text-orange-700" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="number" value={row.notReceivedUnit || ''} onChange={e => updateRow(idx, { notReceivedUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none" /></td>
-                      <td className="border-r border-[#141414] p-0 bg-green-50/20"><input type="number" value={row.damagesRepairable || ''} onChange={e => updateRow(idx, { damagesRepairable: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
-                      <td className="border-r border-[#141414] p-0 bg-red-50/20"><input type="number" value={row.rejectNonRepairable || ''} onChange={e => updateRow(idx, { rejectNonRepairable: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="text" value={row.use} onChange={e => updateRow(idx, { use: e.target.value })} className="w-full p-2 text-center focus:outline-none uppercase" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="text" value={row.batchCode} onChange={e => updateRow(idx, { batchCode: e.target.value })} className="w-full p-2 text-center font-mono focus:outline-none uppercase" /></td>
-                      <td className="border-r border-[#141414] p-0"><input type="text" placeholder="MM/YY" value={row.mfgDate} onChange={e => updateRow(idx, { mfgDate: e.target.value })} className="w-full p-2 text-center text-[9px] focus:outline-none" /></td>
-                      <td className="p-0"><input type="text" placeholder="MM/YY" value={row.expDate} onChange={e => updateRow(idx, { expDate: e.target.value })} className="w-full p-2 text-center text-[9px] focus:outline-none" /></td>
+                      <td className="p-2 border-r-2 border-b border-[#141414] font-mono text-[9px] uppercase">{row.newSku}</td>
+                      <td className="border-r border-b border-[#141414] p-0"><input type="number" value={row.billQtyUnit || ''} onChange={e => updateRow(idx, { billQtyUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
+                      <td className="border-r border-b border-[#141414] p-0"><input type="number" value={row.receivedUnit || ''} onChange={e => updateRow(idx, { receivedUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
+                      <td className="border-r border-b border-[#141414] p-0"><input type="number" value={row.notReceivedUnit || ''} onChange={e => updateRow(idx, { notReceivedUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
+                      <td className="border-r border-b border-[#141414] p-0 bg-orange-50/20"><input type="number" value={row.expiredUnit || ''} onChange={e => updateRow(idx, { expiredUnit: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent font-bold text-orange-700" /></td>
+                      <td className="border-r border-b border-[#141414] p-0 bg-green-50/20"><input type="number" value={row.damagesRepairable || ''} onChange={e => updateRow(idx, { damagesRepairable: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
+                      <td className="border-r border-b border-[#141414] p-0 bg-red-50/20"><input type="number" value={row.rejectNonRepairable || ''} onChange={e => updateRow(idx, { rejectNonRepairable: parseInt(e.target.value) || 0 })} className="w-full p-2 text-center focus:outline-none bg-transparent" /></td>
+                      <td className="border-r border-b border-[#141414] p-0"><input type="text" value={row.use} onChange={e => updateRow(idx, { use: e.target.value })} className="w-full p-2 text-center focus:outline-none uppercase bg-transparent" /></td>
+                      <td className="border-r border-b border-[#141414] p-0"><input type="text" value={row.batchCode} onChange={e => updateRow(idx, { batchCode: e.target.value })} className="w-full p-2 text-center font-mono focus:outline-none uppercase bg-transparent" /></td>
+                      <td className="border-r border-b border-[#141414] p-0"><input type="text" placeholder="MM/YY" value={row.mfgDate} onChange={e => updateRow(idx, { mfgDate: e.target.value })} className="w-full p-2 text-center text-[9px] focus:outline-none bg-transparent" /></td>
+                      <td className="border-b border-[#141414] p-0"><input type="text" placeholder="MM/YY" value={row.expDate} onChange={e => updateRow(idx, { expDate: e.target.value })} className="w-full p-2 text-center text-[9px] focus:outline-none bg-transparent" /></td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={12} className="p-12 text-center text-gray-400 italic font-serif">Add SKUs using the selector bottom right &rarr;</td>
+                    <td colSpan={13} className="p-12 border-b border-[#141414] text-center text-gray-400 italic font-serif">Add SKUs using the selector bottom right &rarr;</td>
                   </tr>
                 )}
                 {/* Visual padding rows */}
                 {Array.from({ length: Math.max(0, 10 - report.rows.length) }).map((_, i) => (
-                  <tr key={`empty-${i}`} className="h-10 border-b border-[#141414]/10">
-                    <td className="border-r-2 border-[#141414]"></td>
-                    <td className="border-r-2 border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td className="border-r border-[#141414]"></td>
-                    <td></td>
+                  <tr key={`empty-${i}`} className="h-10">
+                    <td className="border-r border-b border-[#141414]/10 w-10 bg-gray-50/10"></td>
+                    <td className="border-r-2 border-b border-[#141414]/10 bg-gray-50/10"></td>
+                    <td className="border-r-2 border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-r border-b border-[#141414]/10"></td>
+                    <td className="border-b border-[#141414]/10"></td>
                   </tr>
                 ))}
               </tbody>
@@ -2483,11 +2518,12 @@ function QCHistoryView() {
       ["NOTE", report.noteNarration],
       ["PARTY NAME", report.partyName, "STATE", report.state],
       [""],
-      ["OLD SKU", "NEW SKU", "BILL QTY", "RECEIVED", "EXPIRED", "NOT RECEIVED", "REPAIRABLE", "NON-REPAIRABLE", "USE", "BATCH CODE", "MFG", "EXP"]
+      ["S.NO", "OLD SKU", "NEW SKU", "BILL QTY", "RECEIVED", "NOT RECEIVED", "EXPIRED", "REPAIRABLE", "NON-REPAIRABLE", "USE", "BATCH CODE", "MFG", "EXP"]
     ];
 
-    const rowData = report.rows.map((row: any) => [
-      row.oldSku, row.newSku, row.billQtyUnit, row.receivedUnit, row.expiredUnit, row.notReceivedUnit,
+    const rowData = report.rows.map((row: any, idx: number) => [
+      idx + 1,
+      row.oldSku, row.newSku, row.billQtyUnit, row.receivedUnit, row.notReceivedUnit, row.expiredUnit,
       row.damagesRepairable, row.rejectNonRepairable, row.use, row.batchCode, row.mfgDate, row.expDate
     ]);
 
@@ -2749,8 +2785,8 @@ function QCHistoryView() {
                         <th className="border-r-2 border-[#141414] p-3 text-left">SKU Mapping</th>
                         <th className="border-r border-[#141414] p-3">Bill</th>
                         <th className="border-r border-[#141414] p-3">Rcvd</th>
-                        <th className="border-r border-[#141414] p-3">Exp</th>
                         <th className="border-r border-[#141414] p-3">Not Rcvd</th>
+                        <th className="border-r border-[#141414] p-3">Exp</th>
                         <th className="border-r border-[#141414] p-3">Dmg(R)</th>
                         <th className="border-r border-[#141414] p-3">Rej(NR)</th>
                         <th className="border-r border-[#141414] p-3">Use</th>
@@ -2770,8 +2806,8 @@ function QCHistoryView() {
                           </td>
                           <td className="border-r border-[#141414] p-3 text-center font-bold">{row.billQtyUnit}</td>
                           <td className="border-r border-[#141414] p-3 text-center font-bold">{row.receivedUnit}</td>
-                          <td className="border-r border-[#141414] p-3 text-center font-bold text-orange-600">{row.expiredUnit}</td>
                           <td className="border-r border-[#141414] p-3 text-center font-bold">{row.notReceivedUnit}</td>
+                          <td className="border-r border-[#141414] p-3 text-center font-bold text-orange-600">{row.expiredUnit}</td>
                           <td className="border-r border-[#141414] p-3 text-center font-bold text-green-600">{row.damagesRepairable}</td>
                           <td className="border-r border-[#141414] p-3 text-center font-bold text-red-600">{row.rejectNonRepairable}</td>
                           <td className="border-r border-[#141414] p-3 text-center uppercase">{row.use}</td>
@@ -3010,6 +3046,7 @@ function Dashboard() {
               <table className="w-full text-left text-[10px] border-collapse">
                 <thead>
                   <tr className="bg-[#141414] text-white uppercase tracking-widest">
+                    <th className="p-4 font-black w-12 text-center">S.No</th>
                     <th className="p-4 font-black">SKU Detail</th>
                     <th className="p-4 font-black text-center">Bill</th>
                     <th className="p-4 font-black text-center">Recv</th>
@@ -3022,6 +3059,7 @@ function Dashboard() {
                 <tbody>
                   {selectedQc.rows.map((row, i) => (
                     <tr key={i} className="border-b-2 border-[#141414]/10 hover:bg-gray-50 transition-colors">
+                      <td className="p-4 text-center font-mono font-black text-gray-400 bg-gray-50/50 w-12 border-r border-gray-100">{i + 1}</td>
                       <td className="p-4">
                         <div className="font-black text-xs">{row.newSku}</div>
                         <div className="text-[8px] opacity-40 font-mono">{row.oldSku}</div>
