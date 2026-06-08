@@ -11,6 +11,7 @@
         "boxQty": { "type": "string" },
         "partyName": { "type": "string" },
         "state": { "type": "string" },
+        "city": { "type": "string" },
         "rows": {
           "type": "array",
           "items": {
@@ -40,6 +41,7 @@
         "noteNarration": { "type": "string" },
         "partyName": { "type": "string" },
         "state": { "type": "string" },
+        "city": { "type": "string" },
         "rows": {
           "type": "array",
           "items": {

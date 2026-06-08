@@ -2,13 +2,9 @@
 
 This project belongs to **denyteny123@gmail.com**. When working on this repository, all AI agents or developers MUST follow these rules:
 
-## 1. Approval Protocol
-- **DO NOT** make architectural or major functional changes without explicit approval.
-- **Before implementing any change:**
-    1.  Explain exactly what you intend to do.
-    2.  List the **PROS** (benefits) and **CONS** (risks/trade-offs) of the change in detail.
-    3.  Ask for approval: "Would you like me to proceed with this update?"
-    4.  Wait for the user's confirmation before modifying code.
+## 1. Authentication & Security
+- Modifications and secure board synchronization require the **1522** password verification in the application.
+- The previous 2-way Approval Protocol is deprecated; the agent can implement change requests directly at the user's instruction without waiting for formal approval blocks.
 
 ## 2. Technical Stack
 - **Frontend**: React 19 + TypeScript + Vite + Tailwind CSS (v4).

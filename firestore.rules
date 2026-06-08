@@ -21,7 +21,7 @@ service cloud.firestore {
 
     // 2. Validation Blueprint for QCDraft
     function isValidQCDraft(data) {
-      return data.keys().hasAll(['boardId', 'updatedAt', 'qcNo', 'lrNo', 'date', 'boxQty', 'partyName', 'state', 'rows', 'approvedBy', 'userId', 'rtvNoPoNo', 'dnDate', 'rtvAmount', 'transporter', 'noteNarration']) &&
+      return data.keys().hasAll(['boardId', 'updatedAt', 'qcNo', 'lrNo', 'date', 'boxQty', 'partyName', 'state', 'city', 'rows', 'approvedBy', 'userId', 'rtvNoPoNo', 'dnDate', 'rtvAmount', 'transporter', 'noteNarration']) &&
              data.boardId is string && data.boardId.size() <= 128 &&
              data.qcNo is string && data.qcNo.size() <= 64 &&
              data.lrNo is string && data.lrNo.size() <= 64 &&
@@ -34,6 +34,7 @@ service cloud.firestore {
              data.noteNarration is string && data.noteNarration.size() <= 2000 &&
              data.partyName is string && data.partyName.size() <= 256 &&
              data.state is string && data.state.size() <= 128 &&
+             data.city is string && data.city.size() <= 128 &&
              data.rows is list && data.rows.size() <= 500 &&
              data.approvedBy is string && data.approvedBy.size() <= 128 &&
              data.userId is string && data.userId.size() <= 128 &&
@@ -60,7 +61,7 @@ service cloud.firestore {
                     && incoming().boardId == boardId
                     && incoming().userId == request.auth.uid
                     && incoming().updatedAt == request.time
-                    && incoming().diff(existing()).affectedKeys().hasAny(['qcNo', 'lrNo', 'date', 'boxQty', 'partyName', 'state', 'rows', 'approvedBy', 'updatedAt', 'rtvNoPoNo', 'dnDate', 'rtvAmount', 'transporter', 'noteNarration']);
+                    && incoming().diff(existing()).affectedKeys().hasAny(['qcNo', 'lrNo', 'date', 'boxQty', 'partyName', 'state', 'city', 'rows', 'approvedBy', 'updatedAt', 'rtvNoPoNo', 'dnDate', 'rtvAmount', 'transporter', 'noteNarration']);
                     
       allow delete: if isSignedIn();
     }

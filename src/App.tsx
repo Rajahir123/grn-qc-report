@@ -146,6 +146,47 @@ const INDIAN_STATES = [
   "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry"
 ];
 
+const INDIAN_CITIES_BY_STATE: Record<string, string[]> = {
+  "Andhra Pradesh": ["Visakhapatnam", "Vijayawada", "Guntur", "Nellore", "Kurnool", "Rajahmundry", "Tirupati", "Kakinada", "Kadapa", "Anantapur", "Eluru", "Ongole"],
+  "Arunachal Pradesh": ["Itanagar", "Naharlagun", "Pasighat", "Tawang"],
+  "Assam": ["Guwahati", "Dibrugarh", "Silchar", "Jorhat", "Nagaon", "Tinsukia", "Tezpur"],
+  "Bihar": ["Patna", "Gaya", "Bhagalpur", "Muzaffarpur", "Purnia", "Darbhanga", "Arrah", "Bihar Sharif"],
+  "Chhattisgarh": ["Raipur", "Bhilai", "Bilaspur", "Korba", "Rajnandgaon", "Jagdalpur"],
+  "Goa": ["Panaji", "Margao", "Vasco da Gama", "Mapusa"],
+  "Gujarat": ["Ahmedabad", "Surat", "Vadodara", "Rajkot", "Bhavnagar", "Jamnagar", "Junagadh", "Gandhinagar", "Anand", "Morbi", "Vapi", "Valsad", "Bharuch"],
+  "Haryana": ["Faridabad", "Gurgaon", "Panipat", "Ambala", "Yamunanagar", "Rohtak", "Hisar", "Karnal", "Sonipat", "Panchkula"],
+  "Himachal Pradesh": ["Shimla", "Dharamshala", "Solan", "Mandi", "Kullu"],
+  "Jharkhand": ["Ranchi", "Jamshedpur", "Dhanbad", "Bokaro Steel City", "Deoghar", "Hazaribagh"],
+  "Karnataka": ["Bangalore", "Hubli-Dharwad", "Mysore", "Mangalore", "Belgaum", "Davanagere", "Bellary", "Gulbarga", "Shimoga", "Tumkur", "Udupi"],
+  "Kerala": ["Thiruvananthapuram", "Kochi", "Kozhikode", "Kollam", "Thrissur", "Alappuzha", "Palakkad", "Kannur", "Kottayam"],
+  "Madhya Pradesh": ["Indore", "Bhopal", "Jabalpur", "Gwalior", "Ujjain", "Sagar", "Dewas", "Satna", "Ratlam"],
+  "Maharashtra": ["Mumbai", "Pune", "Nagpur", "Thane", "Pimpri-Chinchwad", "Nashik", "Kalyan-Dombivli", "Vasai-Virar", "Aurangabad", "Navi Mumbai", "Solapur", "Mira-Bhayandar", "Bhiwandi", "Amravati", "Nanded", "Kolhapur", "Sangli", "Jalgaon", "Akola"],
+  "Manipur": ["Imphal"],
+  "Meghalaya": ["Shillong"],
+  "Mizoram": ["Aizawl"],
+  "Nagaland": ["Kohima", "Dimapur"],
+  "Odisha": ["Bhubaneswar", "Cuttack", "Rourkela", "Berhampur", "Sambalpur", "Puri", "Balasore"],
+  "Punjab": ["Ludhiana", "Amritsar", "Jalandhar", "Patiala", "Bathinda", "Mohali", "Hoshiarpur", "Pathankot"],
+  "Rajasthan": ["Jaipur", "Jodhpur", "Kota", "Bikaner", "Ajmer", "Udaipur", "Bhilwara", "Alwar", "Sikar", "Sri Ganganagar"],
+  "Sikkim": ["Gangtok"],
+  "Tamil Nadu": ["Chennai", "Coimbatore", "Madurai", "Trichy", "Salem", "Tiruppur", "Erode", "Vellore", "Thoothukudi", "Nagercoil", "Thanjavur"],
+  "Telangana": ["Hyderabad", "Warangal", "Nizamabad", "Karimnagar", "Ramagundam", "Khammam"],
+  "Tripura": ["Agartala"],
+  "Uttar Pradesh": ["Lucknow", "Kanpur", "Ghaziabad", "Agra", "Meerut", "Varanasi", "Prayagraj", "Bareilly", "Aligarh", "Moradabad", "Saharanpur", "Gorakhpur", "Noida", "Greater Noida", "Firozabad", "Jhansi", "Muzaffarnagar", "Mathura", "Ayodhya"],
+  "Uttarakhand": ["Dehradun", "Haridwar", "Haldwani", "Roorkee", "Rudrapur", "Kashipur", "Rishikesh"],
+  "West Bengal": ["Kolkata", "Howrah", "Siliguri", "Asansol", "Durgapur", "Bardhaman", "Malda", "Baharampur", "Kharagpur"],
+  "Andaman and Nicobar Islands": ["Port Blair"],
+  "Chandigarh": ["Chandigarh"],
+  "Dadra and Nagar Haveli and Daman and Diu": ["Silvassa", "Daman", "Diu"],
+  "Delhi": ["New Delhi", "Delhi", "Dwarka", "Rohini"],
+  "Jammu and Kashmir": ["Srinagar", "Jammu", "Anantnag"],
+  "Ladakh": ["Leh", "Kargil"],
+  "Lakshadweep": ["Kavaratti"],
+  "Puducherry": ["Pondicherry", "Karaikal", "Mahe", "Yanam"]
+};
+
+const ALL_INDIAN_CITIES = Array.from(new Set(Object.values(INDIAN_CITIES_BY_STATE).flat())).sort();
+
 const TRANSPORTERS = [
   "Flipkart",
   "Safexpress",
@@ -296,6 +337,7 @@ interface QCReport {
   noteNarration: string;
   partyName: string;
   state: string;
+  city: string;
   rows: QCRow[];
   approvedBy: string;
 }
@@ -595,7 +637,23 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
                !title.includes('invoice') && !title.includes('status') && c.type !== 'status' && c.type !== 'people';
       });
 
-      const itemName = `Report from ${report.partyName || 'Vendor'} - ${report.lrNo || 'N/A'} - ${report.qcNo || 'N/A'}`.substring(0, 250);
+      const noteCol = boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return title === 'narration' || 
+               title === 'note' || 
+               title === 'notes' || 
+               title === 'remark' || 
+               title === 'remarks' || 
+               title === 'note & narration' ||
+               title === 'note/narration' ||
+               title === 'notes & narration';
+      }) || boardData?.columns?.find(c => {
+        const title = c.title.toLowerCase();
+        return (title.includes('narration') || title.includes('note') || title.includes('remark') || title.includes('comment')) &&
+               c.type !== 'people' && c.type !== 'multiple-person' && !title.includes('owner');
+      });
+
+      const itemName = (report.qcNo || 'QC-').substring(0, 250);
       
       const columnValues: Record<string, any> = {};
       
@@ -687,6 +745,10 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
         setColValue(boxQtyCol, report.boxQty);
       }
 
+      if (noteCol && report.noteNarration) {
+        setColValue(noteCol, report.noteNarration);
+      }
+
       const mutation = `
         mutation($boardId: ID!, $itemName: String!, $columnValues: JSON) {
           create_item (
@@ -758,17 +820,44 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
       
       const mainItemId = creationData.data.create_item.id;
 
-      const tableMarkdown = `
-# SALES RETURN QC REPORT (GRN)
-**QC NO:** ${report.qcNo} | **LR NO:** ${report.lrNo}
-**DATE:** ${report.date} | **BOX QTY:** ${report.boxQty}
-**PARTY:** ${report.partyName} | **STATE:** ${report.state}
+      const skuCards = report.rows.map((r, i) => `
+SKU #${i + 1}: ${r.newSku} ${r.oldSku ? `(Old Ref: ${r.oldSku})` : ''}
+  Quantities & Status:
+    Bill Qty: ${r.billQtyUnit} Units
+    Received: ${r.receivedUnit} Units
+    Not Received: ${r.notReceivedUnit} Units
+    Expired Qty: ${r.expiredUnit} Units
+    Damaged (Repairable): ${r.damagesRepairable} Units
+    Rejected (Non-Repairable): ${r.rejectNonRepairable} Units
+  Quality Parameters:
+    Batch Code: ${r.batchCode || 'N/A'}
+    MFG Date: ${r.mfgDate || 'N/A'}
+    EXP Date: ${r.expDate || 'N/A'}
+    Action/Usage: ${r.use || 'N/A'}
+`).join('\n---\n');
 
+      const tableMarkdown = `
+SALES RETURN QC REPORT (GRN)
+QC NO: ${report.qcNo} | LR NO: ${report.lrNo}
+DATE: ${report.date} | BOX QTY: ${report.boxQty}
+PARTY: ${report.partyName} | STATE: ${report.state} | CITY: ${report.city || 'N/A'}
+NOTE & NARRATION: ${report.noteNarration || 'N/A'}
+
+---
+
+SKU-WISE QC BREAKDOWN
+${skuCards}
+
+---
+
+APPROVE BY: ${report.approvedBy}
+
+---
+
+SYSTEM COMPATIBILITY TABLE (DO NOT REMOVE)
 | OLD SKU | NEW SKU | BILL QTY | RECEIVED | EXPIRED | NOT RECEIVED | DMG (R) | REJ (NR) | USE | BATCH | MFG | EXP |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.receivedUnit} | ${r.expiredUnit} | ${r.notReceivedUnit} | ${r.damagesRepairable} | ${r.rejectNonRepairable} | ${r.use} | ${r.batchCode} | ${r.mfgDate} | ${r.expDate} |`).join('\n')}
-
-**APPROVE BY:** ${report.approvedBy}
       `;
 
       const updateMutation = `
@@ -1407,6 +1496,7 @@ function QCReportView() {
     noteNarration: '',
     partyName: '',
     state: '',
+    city: '',
     rows: [],
     approvedBy: 'Alpino / Yuvraj'
   });
@@ -1417,6 +1507,20 @@ function QCReportView() {
   const [showTransporterMenu, setShowTransporterMenu] = useState(false);
   const [showStateMenu, setShowStateMenu] = useState(false);
   const [stateSearch, setStateSearch] = useState('');
+  const [showCityMenu, setShowCityMenu] = useState(false);
+  const [citySearch, setCitySearch] = useState('');
+
+  const getAvailableCities = () => {
+    if (report.state && INDIAN_CITIES_BY_STATE[report.state]) {
+      return INDIAN_CITIES_BY_STATE[report.state];
+    }
+    return ALL_INDIAN_CITIES;
+  };
+
+  const getFilteredCities = () => {
+    const list = getAvailableCities();
+    return list.filter(c => c.toLowerCase().includes(citySearch.toLowerCase()));
+  };
 
   // Persistent Parties Logic
   useEffect(() => {
@@ -1474,6 +1578,7 @@ function QCReportView() {
             noteNarration: data.noteNarration || '',
             partyName: data.partyName || '',
             state: data.state || '',
+            city: data.city || '',
             rows: data.rows || [],
             approvedBy: data.approvedBy || ''
           };
@@ -1521,6 +1626,7 @@ function QCReportView() {
           noteNarration: report.noteNarration,
           partyName: report.partyName,
           state: report.state,
+          city: report.city || '',
           rows: report.rows,
           approvedBy: report.approvedBy,
           boardId: selectedBoardId,
@@ -1563,6 +1669,7 @@ function QCReportView() {
         noteNarration: report.noteNarration,
         partyName: report.partyName,
         state: report.state,
+        city: report.city || '',
         rows: report.rows,
         approvedBy: report.approvedBy,
         boardId: selectedBoardId,
@@ -1591,6 +1698,7 @@ function QCReportView() {
         noteNarration: '',
         partyName: '',
         state: '',
+        city: '',
         rows: [],
         approvedBy: 'Alpino / Yuvraj'
       });
@@ -2011,8 +2119,8 @@ function QCReportView() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-4 border-2 border-[#141414] mb-4 md:mb-6 bg-white">
-            <div className="lg:col-span-3 p-2 lg:p-4 flex items-center gap-2 lg:gap-4 relative border-b-2 lg:border-b-0 lg:border-r-2 border-[#141414]">
+          <div className="grid grid-cols-1 lg:grid-cols-4 border-2 border-[#141414] mb-4 md:mb-6 bg-white shrink-0">
+            <div className="lg:col-span-2 p-2 lg:p-4 flex items-center gap-2 lg:gap-4 relative border-b-2 lg:border-b-0 lg:border-r-2 border-[#141414]">
               <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">Party Name:</label>
               <div className="flex-1 relative">
                 <input 
@@ -2090,7 +2198,7 @@ function QCReportView() {
                 </AnimatePresence>
               </div>
             </div>
-            <div className="p-3 lg:p-4 flex items-center gap-3 lg:gap-4 relative group">
+            <div className="p-3 lg:p-4 flex items-center gap-3 lg:gap-4 relative group border-b-2 lg:border-b-0 lg:border-r-2 border-[#141414]">
               <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">State:</label>
               <div className="flex-1 relative">
                 <button 
@@ -2143,7 +2251,9 @@ function QCReportView() {
                               <button
                                 key={s}
                                 onClick={() => {
-                                  setReport({...report, state: s});
+                                  const stateCities = INDIAN_CITIES_BY_STATE[s] || [];
+                                  const newCity = (report.city && stateCities.includes(report.city)) ? report.city : '';
+                                  setReport({...report, state: s, city: newCity});
                                   setShowStateMenu(false);
                                   setStateSearch('');
                                 }}
@@ -2151,6 +2261,91 @@ function QCReportView() {
                                   ${report.state === s ? 'bg-[#141414] text-white' : ''}`}
                               >
                                 {s}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+            <div className="p-3 lg:p-4 flex items-center gap-3 lg:gap-4 relative group">
+              <label className="text-[10px] lg:text-[11px] font-bold uppercase whitespace-nowrap">City:</label>
+              <div className="flex-1 relative">
+                <button 
+                  onClick={() => setShowCityMenu(!showCityMenu)}
+                  className="w-full text-sm lg:text-base font-semibold text-left focus:outline-none bg-transparent flex items-center justify-between"
+                >
+                  <span className={report.city ? 'text-[#141414]' : 'opacity-30 uppercase'}>
+                    {report.city || 'Select City'}
+                  </span>
+                  <ChevronDown size={14} className={`transition-transform duration-200 ${showCityMenu ? 'rotate-180' : ''}`} />
+                </button>
+
+                <AnimatePresence>
+                  {showCityMenu && (
+                    <>
+                      <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-40 bg-transparent"
+                        onClick={() => {
+                          setShowCityMenu(false);
+                          setCitySearch('');
+                        }}
+                      />
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        className="absolute left-0 top-full mt-2 w-full min-w-[220px] bg-white border-2 border-[#141414] shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-50 max-h-72 flex flex-col"
+                      >
+                        <div className="p-3 border-b-2 border-[#141414] sticky top-0 bg-white z-10">
+                          <div className="relative">
+                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" />
+                            <input
+                              autoFocus
+                              type="text"
+                              placeholder="Search City..."
+                              value={citySearch}
+                              onChange={e => setCitySearch(e.target.value)}
+                              className="w-full bg-[#141414]/5 border-none text-xs font-bold uppercase py-2 pl-10 pr-3 focus:outline-none placeholder:opacity-50"
+                            />
+                          </div>
+                        </div>
+                        <div className="overflow-y-auto custom-scrollbar flex-1">
+                          {citySearch && !getAvailableCities().find(c => c.toLowerCase() === citySearch.toLowerCase()) && (
+                            <button
+                              onClick={() => {
+                                setReport({...report, city: citySearch.trim()});
+                                setShowCityMenu(false);
+                                setCitySearch('');
+                              }}
+                              className="w-full text-left px-4 py-3 bg-blue-50 hover:bg-blue-100 border-b border-[#141414]/10 transition-all text-xs font-bold"
+                            >
+                              <span className="text-[8px] font-black uppercase text-blue-600 block mb-1">Use Custom Input</span>
+                              {citySearch}
+                            </button>
+                          )}
+
+                          {getFilteredCities().length === 0 ? (
+                            <div className="px-4 py-6 text-xs text-center opacity-40 font-bold uppercase tracking-widest">No cities found</div>
+                          ) : (
+                            getFilteredCities().map(c => (
+                              <button
+                                key={c}
+                                onClick={() => {
+                                  setReport({...report, city: c});
+                                  setShowCityMenu(false);
+                                  setCitySearch('');
+                                }}
+                                className={`w-full text-left px-4 py-3 text-sm font-bold uppercase transition-all hover:bg-[#141414] hover:text-white
+                                  ${report.city === c ? 'bg-[#141414] text-white' : ''}`}
+                              >
+                                {c}
                               </button>
                             ))
                           )}
@@ -2454,7 +2649,8 @@ function QCHistoryView() {
 
   const filteredReports = reports.filter(r => 
     (r.qcNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r.partyName || '').toLowerCase().includes(searchTerm.toLowerCase())
+    (r.partyName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (r.city || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const toggleSelect = (id: string) => {
@@ -2516,7 +2712,7 @@ function QCHistoryView() {
       ["QC NO", report.qcNo, "LR NO", report.lrNo, "DATE", report.date, "BOX QTY", report.boxQty],
       ["RTV/PO", report.rtvNoPoNo, "DN DATE", report.dnDate, "AMOUNT", report.rtvAmount, "TRANSPORTER", report.transporter],
       ["NOTE", report.noteNarration],
-      ["PARTY NAME", report.partyName, "STATE", report.state],
+      ["PARTY NAME", report.partyName, "STATE", report.state, "CITY", report.city || ""],
       [""],
       ["S.NO", "OLD SKU", "NEW SKU", "BILL QTY", "RECEIVED", "NOT RECEIVED", "EXPIRED", "REPAIRABLE", "NON-REPAIRABLE", "USE", "BATCH CODE", "MFG", "EXP"]
     ];
@@ -2776,6 +2972,12 @@ function QCHistoryView() {
                     <label className="text-[11px] font-black uppercase tracking-widest">State:</label>
                     <p className="text-lg font-black uppercase">{selectedReport.state}</p>
                   </div>
+                  {selectedReport.city && (
+                    <div className="flex items-center gap-3 mt-4">
+                      <label className="text-[11px] font-black uppercase tracking-widest">City:</label>
+                      <p className="text-lg font-black uppercase">{selectedReport.city}</p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="border-2 border-[#141414] overflow-x-auto">
@@ -2882,9 +3084,11 @@ function Dashboard() {
         const qcNoMatch = updateBody.match(/\*\*QC NO:\*\*\s*(QC-\d+)/);
         const partyMatch = updateBody.match(/\*\*PARTY:\*\*\s*([^\n|]+)/);
         const stateMatch = updateBody.match(/\*\*STATE:\*\*\s*([^\n|]+)/);
+        const cityMatch = updateBody.match(/\*\*CITY:\*\*\s*([^\n|]+)/);
         const dateMatch = updateBody.match(/\*\*DATE:\*\*\s*(\d{4}-\d{2}-\d{2})/);
         const boxMatch = updateBody.match(/\*\*BOX QTY:\*\*\s*(\d+)/);
         const lrMatch = updateBody.match(/\*\*LR NO:\*\*\s*([^\n|]+)/);
+        const noteMatch = updateBody.match(/\*\*NOTE & NARRATION:\*\*\s*([^\n|]+)/);
 
         lines.forEach((line: string) => {
           const parts = line.split('|').map(s => s.trim());
@@ -2910,11 +3114,13 @@ function Dashboard() {
           qcNo: qcNoMatch?.[1]?.trim() || item.name || 'Unknown',
           partyName: partyMatch?.[1]?.trim() || 'Unknown',
           state: stateMatch?.[1]?.trim() || 'Unknown',
+          city: cityMatch?.[1]?.trim() || '',
           date: dateMatch?.[1] || '',
           rows,
           approvedBy: '',
           lrNo: lrMatch?.[1]?.trim() || '',
-          boxQty: boxMatch?.[1] || ''
+          boxQty: boxMatch?.[1] || '',
+          noteNarration: noteMatch?.[1]?.trim() || ''
         };
       }).filter((r: QCReport) => r.rows.length > 0);
 
@@ -2938,7 +3144,8 @@ function Dashboard() {
     return analyticsData.filter(r => 
       (r.qcNo || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (r.partyName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (r.state || '').toLowerCase().includes(searchQuery.toLowerCase())
+      (r.state || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (r.city || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [analyticsData, searchQuery]);
 
@@ -2959,7 +3166,8 @@ function Dashboard() {
   const partyLocationStats = useMemo(() => {
     const stats: Record<string, number> = {};
     analyticsData.forEach(report => {
-      const key = `${report.partyName} (${report.state})`;
+      const location = report.city ? `${report.state}, ${report.city}` : report.state;
+      const key = `${report.partyName} (${location})`;
       const rtv = report.rows.reduce((acc, row) => acc + row.notReceivedUnit + row.rejectNonRepairable + row.expiredUnit, 0);
       stats[key] = (stats[key] || 0) + rtv;
     });
@@ -3029,7 +3237,7 @@ function Dashboard() {
                 </div>
                 <div className="space-y-1">
                   <p className="font-black uppercase tracking-wider opacity-40">State/Location</p>
-                  <p className="font-bold text-sm uppercase">{selectedQc.state}</p>
+                  <p className="font-bold text-sm uppercase">{selectedQc.state}{selectedQc.city ? ` - ${selectedQc.city}` : ''}</p>
                 </div>
                 <div className="space-y-1">
                   <p className="font-black uppercase tracking-wider opacity-40">LR Number</p>
@@ -3107,7 +3315,7 @@ function Dashboard() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={16} />
             <input 
               type="text"
-              placeholder="Search QC No, Party, or State..."
+              placeholder="Search QC No, Party, State, or City..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full bg-[#141414]/5 border-2 border-[#141414] p-4 pl-12 text-xs font-bold uppercase tracking-widest focus:outline-none focus:bg-white transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
@@ -3122,7 +3330,7 @@ function Dashboard() {
                   >
                     <div>
                       <div className="text-[10px] font-black uppercase tracking-wider group-hover:text-red-600 transition-colors">{r.qcNo}</div>
-                      <div className="text-[8px] opacity-40 uppercase font-medium">{r.partyName} | {r.state}</div>
+                      <div className="text-[8px] opacity-40 uppercase font-medium">{r.partyName} | {r.state}{r.city ? ` - ${r.city}` : ''}</div>
                     </div>
                     <ArrowLeft className="rotate-180 opacity-0 group-hover:opacity-100 transition-all" size={14} />
                   </button>
@@ -3265,7 +3473,10 @@ function Dashboard() {
                             const skuRtv = report.rows
                               .filter(r => r.newSku === skuStat.name)
                               .reduce((ra, row) => ra + row.notReceivedUnit + row.rejectNonRepairable + row.expiredUnit, 0);
-                            if (skuRtv > acc.count) return { name: report.partyName, state: report.state, count: skuRtv };
+                            if (skuRtv > acc.count) {
+                              const location = report.city ? `${report.state} - ${report.city}` : report.state;
+                              return { name: report.partyName, state: location, count: skuRtv };
+                            }
                             return acc;
                           }, { name: 'Multiple', state: '-', count: 0 });
 
