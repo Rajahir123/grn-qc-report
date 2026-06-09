@@ -42,37 +42,11 @@ service cloud.firestore {
     }
 
     match /qcDrafts/{boardId} {
-      // Allow any signed in user to read/write drafts for a board they are on.
-      // In a more complex app, we'd check Monday permissions, but for now 
-      // simple authenticated access is the baseline.
-      
-      allow get: if isSignedIn();
-      
-      allow create: if isSignedIn() 
-                    && isValidId(boardId) 
-                    && isValidQCDraft(incoming())
-                    && incoming().boardId == boardId
-                    && incoming().userId == request.auth.uid
-                    && incoming().updatedAt == request.time;
-                    
-      allow update: if isSignedIn()
-                    && isValidId(boardId)
-                    && isValidQCDraft(incoming())
-                    && incoming().boardId == boardId
-                    && incoming().userId == request.auth.uid
-                    && incoming().updatedAt == request.time
-                    && incoming().diff(existing()).affectedKeys().hasAny(['qcNo', 'lrNo', 'date', 'boxQty', 'partyName', 'state', 'city', 'rows', 'approvedBy', 'updatedAt', 'rtvNoPoNo', 'dnDate', 'rtvAmount', 'transporter', 'noteNarration']);
-                    
-      allow delete: if isSignedIn();
+      allow read, write: if true;
     }
 
     match /qcReports/{reportId} {
-      allow get, list: if isSignedIn();
-      allow create: if isSignedIn()
-                    && isValidId(reportId)
-                    && incoming().qcNo == reportId
-                    && incoming().userId == request.auth.uid;
-      allow update, delete: if isSignedIn();
+      allow read, write: if true;
     }
 
     match /boardConfigs/{boardId} {
