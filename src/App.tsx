@@ -1940,6 +1940,28 @@ function QCReportView() {
     }
   };
 
+  const handleSavePdf = async () => {
+    try {
+      setIsGeneratingPdf(true);
+      const pdfData = await generatePdf();
+      if (!pdfData) return;
+
+      const { base64, filename } = pdfData;
+
+      // Always download/save directly as fallback/primary action for direct device storage
+      const link = document.createElement('a');
+      link.href = base64;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Error saving PDF:', err);
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
   return (
     <div className="flex-1 bg-[#F5F5F5] flex flex-col h-screen overflow-hidden font-sans print:block print:h-auto print:overflow-visible">
       {/* Action Header */}
@@ -1972,6 +1994,16 @@ function QCReportView() {
             {isGeneratingPdf ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
             <span className="hidden sm:inline">{isGeneratingPdf ? 'Generating PDF...' : 'Share PDF Report'}</span>
             <span className="sm:hidden">{isGeneratingPdf ? '...' : 'Share'}</span>
+          </button>
+          <button 
+            onClick={handleSavePdf}
+            disabled={isGeneratingPdf}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 lg:px-6 py-2.5 lg:py-3 border border-[#141414] font-bold uppercase tracking-widest text-[9px] lg:text-[10px] hover:bg-gray-50 transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] active:translate-x-1 active:translate-y-1 active:shadow-none bg-amber-50/50 disabled:opacity-50"
+            title="Save QC Report to Device"
+          >
+            {isGeneratingPdf ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+            <span className="hidden sm:inline">{isGeneratingPdf ? 'Generating PDF...' : 'Save QC'}</span>
+            <span className="sm:hidden">{isGeneratingPdf ? '...' : 'Save'}</span>
           </button>
           <button 
             onClick={handlePrint}
