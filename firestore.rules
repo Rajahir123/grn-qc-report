@@ -72,7 +72,7 @@ service cloud.firestore {
                     && isValidId(reportId)
                     && incoming().qcNo == reportId
                     && incoming().userId == request.auth.uid;
-      allow update, delete: if isSignedIn() && (existing().userId == request.auth.uid);
+      allow update, delete: if isSignedIn();
     }
 
     match /boardConfigs/{boardId} {

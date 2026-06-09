@@ -2682,10 +2682,30 @@ function QCHistoryView() {
   const [selectedReport, setSelectedReport] = useState<any | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [actionSuccess, setActionSuccess] = useState('');
+
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(auth.currentUser);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setCurrentUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Admin Verification States
+  const [isAdminVerified, setIsAdminVerified] = useState(() => {
+    return localStorage.getItem('qc_admin_verified') === '1522';
+  });
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [pendingAction, setPendingAction] = useState<{ type: 'delete' | 'download' | 'bulk-delete' | 'bulk-download'; payload?: any } | null>(null);
 
   useEffect(() => {
     const fetchHistory = async () => {
-      if (!auth.currentUser) return;
+      if (!currentUser) return;
       setLoading(true);
       try {
         const q = query(collection(db, 'qcReports'), orderBy('syncedAt', 'desc'));
@@ -2702,7 +2722,7 @@ function QCHistoryView() {
       }
     };
     fetchHistory();
-  }, [auth.currentUser]);
+  }, [currentUser]);
 
   const filteredReports = reports.filter(r => 
     (r.qcNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -2728,39 +2748,91 @@ function QCHistoryView() {
     }
   };
 
-  const handleBulkDelete = async () => {
-    if (selectedIds.size === 0) return;
-    if (!window.confirm(`Are you sure you want to delete ${selectedIds.size} reports from history? This action cannot be undone.`)) return;
-
-    setIsDeleting(true);
-    try {
-      const batch = writeBatch(db);
-      selectedIds.forEach(id => {
-        batch.delete(doc(db, 'qcReports', id));
-      });
-      await batch.commit();
-      
-      // Update local state
-      setReports(prev => prev.filter(r => !selectedIds.has(r.id)));
-      setSelectedIds(new Set());
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'qcReports (batch)');
-    } finally {
-      setIsDeleting(false);
+  const handlePasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === '1522') {
+      setIsAdminVerified(true);
+      localStorage.setItem('qc_admin_verified', '1522');
+      setShowPasswordModal(false);
+      setPasswordError('');
+      if (pendingAction) {
+        executeAdminAction(pendingAction.type, pendingAction.payload);
+        setPendingAction(null);
+      }
+    } else {
+      setPasswordError('Invalid Admin Password');
     }
   };
 
-  const handleBulkDownload = () => {
-    if (selectedIds.size === 0) return;
-    
-    // For bulk download, we'll trigger individual downloads for now
-    // In a more complex app, we might want to generate a single ZIP or combined Excel
-    selectedIds.forEach(id => {
-      const report = reports.find(r => r.id === id);
-      if (report) {
-        exportToExcel(report);
+  const runWithAdminCheck = (actionType: 'delete' | 'download' | 'bulk-delete' | 'bulk-download', actionPayload?: any) => {
+    if (isAdminVerified) {
+      executeAdminAction(actionType, actionPayload);
+    } else {
+      setPendingAction({ type: actionType, payload: actionPayload });
+      setPasswordInput('');
+      setPasswordError('');
+      setShowPasswordModal(true);
+    }
+  };
+
+  const executeAdminAction = async (type: string, payload?: any) => {
+    setActionError('');
+    setActionSuccess('');
+    if (type === 'delete' && payload) {
+      if (!window.confirm(`Are you sure you want to delete report ${payload.qcNo || 'selected'}? This action cannot be undone.`)) return;
+      setIsDeleting(true);
+      const docId = payload.id || payload.qcNo;
+      if (!docId) {
+        setActionError('Failed to delete: report identifier not found.');
+        setIsDeleting(false);
+        return;
       }
-    });
+      try {
+        await deleteDoc(doc(db, 'qcReports', docId));
+        setReports(prev => prev.filter(r => r.id !== docId && r.qcNo !== docId));
+        if (selectedReport && (selectedReport.id === docId || selectedReport.qcNo === docId)) {
+          setSelectedReport(null);
+        }
+        setActionSuccess(`Report ${docId} deleted successfully.`);
+      } catch (error) {
+        console.error('Delete error:', error);
+        setActionError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setIsDeleting(false);
+      }
+    } else if (type === 'download' && payload) {
+      exportToExcel(payload);
+    } else if (type === 'bulk-delete') {
+      if (selectedIds.size === 0) return;
+      if (!window.confirm(`Are you sure you want to delete ${selectedIds.size} reports from history? This action cannot be undone.`)) return;
+
+      setIsDeleting(true);
+      try {
+        const batch = writeBatch(db);
+        selectedIds.forEach(id => {
+          batch.delete(doc(db, 'qcReports', id));
+        });
+        await batch.commit();
+        
+        // Update local state
+        setReports(prev => prev.filter(r => !selectedIds.has(r.id) && !selectedIds.has(r.qcNo)));
+        setSelectedIds(new Set());
+        setActionSuccess('Selected reports deleted successfully.');
+      } catch (error) {
+        console.error('Bulk delete error:', error);
+        setActionError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setIsDeleting(false);
+      }
+    } else if (type === 'bulk-download') {
+      if (selectedIds.size === 0) return;
+      selectedIds.forEach(id => {
+        const report = reports.find(r => r.id === id || r.qcNo === id);
+        if (report) {
+          exportToExcel(report);
+        }
+      });
+    }
   };
 
   const exportToExcel = (report: any) => {
@@ -2791,13 +2863,43 @@ function QCHistoryView() {
     XLSX.writeFile(workbook, `QC_Report_${report.qcNo}.xlsx`);
   };
 
+  const handleAdminLockToggle = () => {
+    if (isAdminVerified) {
+      setIsAdminVerified(false);
+      localStorage.removeItem('qc_admin_verified');
+    } else {
+      setPendingAction(null);
+      setPasswordInput('');
+      setPasswordError('');
+      setShowPasswordModal(true);
+    }
+  };
+
   return (
     <div className="flex-1 bg-[#F5F4F0] overflow-hidden flex flex-col h-full">
       <div className="p-6 lg:p-10 flex flex-col h-full">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
           <div>
-            <h2 className="text-3xl font-black uppercase tracking-tight mb-2">QC Archive</h2>
-            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">System Record History (Synced to Monday)</p>
+            <div className="flex items-center gap-3">
+              <h2 className="text-3xl font-black uppercase tracking-tight">QC Archive</h2>
+              {isAdminVerified ? (
+                <button 
+                  onClick={handleAdminLockToggle}
+                  className="bg-green-100 hover:bg-green-200 text-green-700 border border-green-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest flex items-center gap-1 cursor-pointer transition-all"
+                  title="Click to lock admin mode"
+                >
+                  ● Admin Active
+                </button>
+              ) : (
+                <button 
+                  onClick={handleAdminLockToggle}
+                  className="bg-amber-100 hover:bg-amber-200 text-amber-700 border border-amber-600 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest flex items-center gap-1 cursor-pointer transition-all"
+                >
+                  🔒 Unlock Admin
+                </button>
+              )}
+            </div>
+            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mt-1">System Record History (Synced to Monday)</p>
           </div>
           
           <div className="relative w-full md:w-80">
@@ -2811,6 +2913,32 @@ function QCHistoryView() {
             />
           </div>
         </div>
+        
+        {/* Simple Notification Banner */}
+        <AnimatePresence>
+          {actionError && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-6 p-4 bg-red-55 border-2 border-red-600 text-red-700 text-xs font-bold uppercase tracking-wide flex justify-between items-center"
+            >
+              <span>{actionError}</span>
+              <button onClick={() => setActionError('')} className="opacity-60 hover:opacity-100 cursor-pointer text-sm font-black">✕</button>
+            </motion.div>
+          )}
+          {actionSuccess && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-6 p-4 bg-green-50 border-2 border-green-600 text-green-700 text-xs font-bold uppercase tracking-wide flex justify-between items-center"
+            >
+              <span>{actionSuccess}</span>
+              <button onClick={() => setActionSuccess('')} className="opacity-60 hover:opacity-100 cursor-pointer text-sm font-black">✕</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Bulk Actions Header */}
         <AnimatePresence>
@@ -2840,13 +2968,13 @@ function QCHistoryView() {
               </div>
               <div className="flex items-center gap-3">
                 <button 
-                  onClick={handleBulkDownload}
+                  onClick={() => runWithAdminCheck('bulk-download')}
                   className="flex items-center gap-2 bg-white text-[#141414] px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:invert transition-all"
                 >
                   <Download size={14} /> Download Selected
                 </button>
                 <button 
-                  onClick={handleBulkDelete}
+                  onClick={() => runWithAdminCheck('bulk-delete')}
                   disabled={isDeleting}
                   className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-red-700 transition-all disabled:opacity-50"
                 >
@@ -2891,13 +3019,22 @@ function QCHistoryView() {
                         <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 group-hover:opacity-60">Record ID</span>
                         <h4 className="text-xl font-black uppercase tracking-tight">{report.qcNo}</h4>
                       </div>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); exportToExcel(report); }}
-                        className="p-3 bg-[#141414] text-white border border-white/20 hover:bg-white hover:text-[#141414] transition-all"
-                        title="Export to Excel"
-                      >
-                        <Download size={16} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); runWithAdminCheck('download', report); }}
+                          className="p-3 bg-[#141414] text-white border border-white/20 hover:bg-white hover:text-[#141414] transition-all"
+                          title="Export to Excel"
+                        >
+                          <Download size={16} />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); runWithAdminCheck('delete', report); }}
+                          className="p-3 bg-red-600 hover:bg-red-750 text-white border-none transition-all flex items-center justify-center"
+                          title="Delete Report"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-6 relative z-10">
@@ -2962,10 +3099,17 @@ function QCHistoryView() {
                 </div>
                 <div className="flex items-center gap-3">
                   <button 
-                    onClick={() => exportToExcel(selectedReport)}
+                    onClick={() => runWithAdminCheck('download', selectedReport)}
                     className="flex items-center gap-2 px-6 py-2 bg-[#141414] text-white text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all"
                   >
                     <Download size={14} /> Export Excel
+                  </button>
+                  <button 
+                    onClick={() => runWithAdminCheck('delete', selectedReport)}
+                    disabled={isDeleting}
+                    className="flex items-center gap-2 px-6 py-2 bg-red-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-red-700 transition-all disabled:opacity-50"
+                  >
+                    <Trash2 size={14} /> {isDeleting ? 'Deleting...' : 'Delete Report'}
                   </button>
                   <button 
                     onClick={() => setSelectedReport(null)}
@@ -3079,6 +3223,79 @@ function QCHistoryView() {
                   </table>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Password Verification Modal */}
+      <AnimatePresence>
+        {showPasswordModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setShowPasswordModal(false);
+                setPendingAction(null);
+              }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white border-4 border-[#141414] w-full max-w-sm p-6 z-10 shadow-[12px_12px_0px_0px_rgba(20,20,20,1)] relative"
+            >
+              <button 
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setPendingAction(null);
+                }}
+                className="absolute right-4 top-4 p-1 hover:bg-gray-100 transition-all border border-[#141414]/10 cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+
+              <div className="text-center space-y-4 mb-6">
+                <div className="w-12 h-12 bg-amber-500 text-white flex items-center justify-center mx-auto border-2 border-[#141414] text-xl font-bold">
+                  ⚠️
+                </div>
+                <div>
+                  <h3 className="text-lg font-black uppercase tracking-tight">Admin Authorization</h3>
+                  <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest mt-1">Required to Delete or Download History Check</p>
+                </div>
+              </div>
+
+              <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-widest opacity-60 block text-center">Enter 4-Digit PIN</label>
+                  <input 
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="••••"
+                    maxLength={4}
+                    className="w-full bg-[#f5f5f5] border-2 border-[#141414] p-3 font-mono text-center text-3xl tracking-[0.5em] focus:outline-none focus:bg-white transition-all placeholder:text-[#ccc]"
+                    required
+                    autoFocus
+                  />
+                </div>
+
+                {passwordError && (
+                  <div className="p-3 bg-red-50 border-2 border-red-600 text-red-600 text-[9px] font-black uppercase tracking-widest text-center">
+                    {passwordError}
+                  </div>
+                )}
+
+                <button 
+                  type="submit"
+                  className="w-full py-3 bg-[#141414] text-white text-[11px] font-black uppercase tracking-widest hover:invert transition-all shadow-[4px_4px_0px_0px_rgba(20,20,20,0.3)] active:shadow-none cursor-pointer"
+                >
+                  Verify PIN
+                </button>
+              </form>
             </motion.div>
           </div>
         )}
