@@ -1743,21 +1743,34 @@ function QCReportView() {
     const reportElement = document.getElementById('report-to-pdf');
     if (!reportElement) return null;
 
-    // Apply print/PDF styles temporarily via CSS classes
+    // Save current status of the element to restore cleanly
+    const originalWidth = reportElement.style.width;
+    const originalMinWidth = reportElement.style.minWidth;
+    const originalMaxWidth = reportElement.style.maxWidth;
+    const hadIsGeneratingPdf = reportElement.classList.contains('is-generating-pdf');
+    const hadMobileZoomOut = reportElement.classList.contains('mobile-zoom-out');
+
+    // Force perfect desktop size layout synchronously
     reportElement.classList.add('is-generating-pdf');
     reportElement.classList.remove('mobile-zoom-out');
+    reportElement.style.width = '1200px';
+    reportElement.style.minWidth = '1200px';
+    reportElement.style.maxWidth = '1200px';
     
     try {
-      // Use html-to-image to capture at this beautiful overridden width (1024px)
+      // Use htmlToImage to capture the beautifully formatted desktop-layout live element
       const imgData = await htmlToImage.toJpeg(reportElement, {
         quality: 0.98,
         backgroundColor: '#ffffff',
-        pixelRatio: 2.5, // Slightly higher for premium, ultra-crisp presentation
+        pixelRatio: 2.5,
       });
-      
-      // Restore original screen-view classes immediately
-      reportElement.classList.remove('is-generating-pdf');
-      reportElement.classList.add('mobile-zoom-out');
+
+      // Restore original container styles immediately after capture to avoid screen flickering
+      if (!hadIsGeneratingPdf) reportElement.classList.remove('is-generating-pdf');
+      if (hadMobileZoomOut) reportElement.classList.add('mobile-zoom-out');
+      reportElement.style.width = originalWidth;
+      reportElement.style.minWidth = originalMinWidth;
+      reportElement.style.maxWidth = originalMaxWidth;
 
       const pdf = new jsPDF({
         orientation: 'p',
@@ -1765,29 +1778,41 @@ function QCReportView() {
         format: 'a4',
       });
 
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // JSpdf A4: 210mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // JSpdf A4: 297mm
+
+      // Configure clean margins (10mm is standard for professional documents)
+      const margin = 10;
+      const destWidth = pdfWidth - (margin * 2); // 190mm
+      
+      // Get the properties of the captured canvas image
       const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth(); // typically 210mm
-      const pdfHeight = pdf.internal.pageSize.getHeight(); // typically 297mm
+      const ratio = destWidth / imgProps.width;
+      const destHeight = imgProps.height * ratio;
 
-      // Configure generous 8mm printable margins around the report card
-      const margin = 8;
-      const maxPdfWidth = pdfWidth - (margin * 2);
-      const maxPdfHeight = pdfHeight - (margin * 2);
+      const pageHeightLimit = pdfHeight - (margin * 2); // 277mm
 
-      // Compute optimal scale factor to fit exactly 1 page
-      const ratioWidth = maxPdfWidth / imgProps.width;
-      const ratioHeight = maxPdfHeight / imgProps.height;
-      const scale = Math.min(ratioWidth, ratioHeight);
+      if (destHeight <= pageHeightLimit) {
+        // Fits perfectly on a single page, clean top alignment for a professional A4 look
+        const yOffset = margin;
+        pdf.addImage(imgData, 'JPEG', margin, yOffset, destWidth, destHeight);
+      } else {
+        // Multi-page splitting! Spans multiple pages beautifully without compressing or cropping
+        let heightLeft = destHeight;
+        let position = margin;
+        let pageNumber = 1;
 
-      const drawnWidth = imgProps.width * scale;
-      const drawnHeight = imgProps.height * scale;
+        pdf.addImage(imgData, 'JPEG', margin, position, destWidth, destHeight);
+        heightLeft -= pageHeightLimit;
 
-      // Center the report on the single page
-      const xOffset = margin + (maxPdfWidth - drawnWidth) / 2;
-      const yOffset = margin + (maxPdfHeight - drawnHeight) / 2;
-
-      // Add image to the single A4 page
-      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, drawnWidth, drawnHeight);
+        while (heightLeft > 0) {
+          position = margin - (pageHeightLimit * pageNumber);
+          pdf.addPage();
+          pdf.addImage(imgData, 'JPEG', margin, position, destWidth, destHeight);
+          heightLeft -= pageHeightLimit;
+          pageNumber++;
+        }
+      }
       
       const pdfBlob = pdf.output('blob');
       const filename = `QC_Report_${report.qcNo || 'Export'}.pdf`;
@@ -1806,9 +1831,12 @@ function QCReportView() {
       });
     } catch (e) {
       console.error("Error generating PDF:", e);
-      // Restore original classes in case of failure
-      reportElement.classList.remove('is-generating-pdf');
-      reportElement.classList.add('mobile-zoom-out');
+      // Ensure we restore original styles even on failure
+      if (!hadIsGeneratingPdf) reportElement.classList.remove('is-generating-pdf');
+      if (hadMobileZoomOut) reportElement.classList.add('mobile-zoom-out');
+      reportElement.style.width = originalWidth;
+      reportElement.style.minWidth = originalMinWidth;
+      reportElement.style.maxWidth = originalMaxWidth;
       throw e;
     }
   };
@@ -2419,7 +2447,7 @@ function QCReportView() {
                   </tr>
                 )}
                 {/* Visual padding rows */}
-                {Array.from({ length: Math.max(0, 10 - report.rows.length) }).map((_, i) => (
+                {Array.from({ length: Math.max(0, 17 - report.rows.length) }).map((_, i) => (
                   <tr key={`empty-${i}`} className="h-10">
                     <td className="border-r border-b border-[#141414]/10 w-10 bg-gray-50/10"></td>
                     <td className="border-r-2 border-b border-[#141414]/10 bg-gray-50/10"></td>
@@ -2451,10 +2479,7 @@ function QCReportView() {
                 <div className="border-t border-dotted border-[#141414]/20 pt-1 text-[8px] lg:text-[10px] font-mono opacity-20">SYSTEM_SIGN_OFF</div>
               </div>
             </div>
-            <div className="text-right sm:text-right">
-              <p className="text-[8px] lg:text-[10px] font-mono opacity-20 uppercase tracking-[0.2em]">Sales Return GRN Module</p>
-              <p className="text-[7px] lg:text-[9px] font-mono opacity-10 uppercase tracking-tighter">Powered by Industrial QC System</p>
-            </div>
+            <div></div>
           </div>
         </div>
       </div>

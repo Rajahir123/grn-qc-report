@@ -29,17 +29,17 @@
 
 /* Print & PDF Generation layout overrides to force perfect desktop formatting on any viewport */
 .is-generating-pdf {
-  width: 1024px !important;
+  width: 1200px !important;
   max-width: none !important;
   padding: 3rem !important; /* Forces lg:p-12 */
   box-shadow: none !important;
-  border-width: 2px !important;
-  border-color: #141414 !important;
+  border: none !important; /* Completely remove the thick outer card border for standard A4 sheet style */
 }
 
+/* Make header title larger and clean alignment */
 .is-generating-pdf h1 {
-  font-size: 1.875rem !important; /* lg:text-3xl / 4xl */
-  letter-spacing: 0.3em !important; /* lg:tracking-[0.3em] */
+  font-size: 2.25rem !important; /* lg:text-3xl / 4xl */
+  letter-spacing: 0.35em !important; /* lg:tracking-[0.35em] */
 }
 
 /* Force Row 1 & 2 metadata grid to 4 columns always */
@@ -48,9 +48,95 @@
   grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
 }
 
-/* Force signature, transporter dropdowns and controls behaviour on PDF */
+/* Metadata Cell Labels (QC.NO, LR NO, etc) */
+.is-generating-pdf label {
+  font-size: 15px !important;
+  font-weight: 950 !important;
+  letter-spacing: 0.12em !important;
+  opacity: 0.8 !important;
+  margin-bottom: 6px !important;
+}
 
-/* Force the signature row to be a single horizontal row */
+/* Inputs and values inside metadata cells */
+.is-generating-pdf input,
+.is-generating-pdf textarea {
+  border: none !important;
+  background: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+  color: #141414 !important;
+  opacity: 1 !important;
+  font-size: 19px !important;
+  font-weight: 800 !important;
+}
+
+/* Custom rule for dropdowns/transporter/party text */
+.is-generating-pdf .font-mono.text-xs,
+.is-generating-pdf .text-sm.lg\:text-base {
+  font-size: 21px !important;
+  font-weight: 850 !important;
+}
+
+.is-generating-pdf .font-serif.italic.text-base,
+.is-generating-pdf .font-serif.italic.text-lg {
+  font-size: 24px !important;
+  font-weight: 900 !important;
+}
+
+/* Alignment fields label for Party Name, State, City */
+.is-generating-pdf .lg\:col-span-2 label,
+.is-generating-pdf .flex.items-center label {
+  font-size: 16px !important;
+  font-weight: 950 !important;
+  opacity: 0.9 !important;
+}
+
+/* Table overrides - headers sizing and spacing */
+.is-generating-pdf table any {
+  font-size: 15px !important;
+}
+
+.is-generating-pdf table thead th {
+  font-size: 16px !important;
+  font-weight: 950 !important;
+  padding: 14px 8px !important;
+  letter-spacing: 0.06em !important;
+}
+
+/* Table overrides - secondary headers / Sub units (Unit, Date) */
+.is-generating-pdf table thead tr.text-\[8px\] th,
+.is-generating-pdf table thead tr:nth-child(2) th {
+  font-size: 14px !important;
+  font-weight: 900 !important;
+  padding: 10px 8px !important;
+}
+
+/* Table body row layout sizing */
+.is-generating-pdf table tbody td {
+  padding: 12px 6px !important;
+  font-size: 15px !important;
+}
+
+/* S.No index column sizing */
+.is-generating-pdf table tbody td.font-black {
+  font-size: 16px !important;
+  font-weight: 950 !important;
+}
+
+/* New SKU / Old SKU mono font sizing */
+.is-generating-pdf table tbody td.font-mono {
+  font-size: 15px !important;
+  font-weight: 850 !important;
+}
+
+/* Table cell inputs text size */
+.is-generating-pdf table tbody input {
+  font-size: 16px !important;
+  font-weight: 850 !important;
+  height: 32px !important;
+}
+
+/* Force signature row to be structured in a tidy horizontal line */
 .is-generating-pdf .flex-col.sm\:flex-row {
   display: flex !important;
   flex-direction: row !important;
@@ -59,23 +145,46 @@
 }
 
 .is-generating-pdf .lg\:p-4 {
-  padding: 1rem !important;
+  padding: 1.25rem !important;
 }
 
 .is-generating-pdf .lg\:w-48 {
-  width: 12rem !important;
+  width: 14rem !important;
 }
 
 .is-generating-pdf .lg\:min-h-\[80px\] {
-  min-height: 80px !important;
+  min-height: 90px !important;
 }
 
 .is-generating-pdf .sm\:w-64 {
-  width: 16rem !important;
+  width: 18rem !important;
 }
 
 .is-generating-pdf .text-right.sm\:text-right {
   text-align: right !important;
+}
+
+/* Footer sign-off and approval text sizes */
+.is-generating-pdf .min-h-\[70px\],
+.is-generating-pdf .min-h-\[80px\] {
+  padding: 1.25rem !important;
+}
+
+.is-generating-pdf .min-h-\[70px\] span,
+.is-generating-pdf .min-h-\[80px\] span {
+  font-size: 12px !important;
+  font-weight: 900 !important;
+  opacity: 0.75 !important;
+}
+
+.is-generating-pdf .min-h-\[70px\] input {
+  font-size: 24px !important;
+  font-weight: 800 !important;
+}
+
+.is-generating-pdf .border-t.border-dotted {
+  font-size: 11px !important;
+  opacity: 0.5 !important;
 }
 
 /* Hide Chevrons and Row Deletions in the PDF capture */
@@ -85,5 +194,19 @@
 
 .is-generating-pdf .print\:hidden {
   display: none !important;
+}
+
+/* Force table and all nested scrollbars to fully expand without clipping */
+.is-generating-pdf .overflow-x-auto,
+.is-generating-pdf .overflow-y-auto {
+  overflow: visible !important;
+  max-width: none !important;
+  width: 100% !important;
+  height: auto !important;
+}
+
+.is-generating-pdf table {
+  width: 100% !important;
+  table-layout: auto !important;
 }
 
