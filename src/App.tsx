@@ -653,7 +653,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
                c.type !== 'people' && c.type !== 'multiple-person' && !title.includes('owner');
       });
 
-      const itemName = (report.qcNo || 'QC-').substring(0, 250);
+      const itemName = `${report.qcNo || 'QC-'} | ${report.partyName || ''}`.substring(0, 250);
       
       const columnValues: Record<string, any> = {};
       
@@ -726,7 +726,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
 
       // Sync others using helper
       setColValue(transporterCol, report.transporter);
-      setColValue(partyCol, report.partyName);
+      setColValue(partyCol, `${report.qcNo || 'QC-'} | ${report.partyName || ''}`);
       
       if (requestDateCol && report.date && requestDateCol.type === 'date') {
         columnValues[requestDateCol.id] = { date: report.date };
@@ -2684,6 +2684,8 @@ function QCHistoryView() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
+  const [pdfGeneratingReport, setPdfGeneratingReport] = useState<any | null>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(auth.currentUser);
 
@@ -2701,7 +2703,7 @@ function QCHistoryView() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
-  const [pendingAction, setPendingAction] = useState<{ type: 'delete' | 'download' | 'bulk-delete' | 'bulk-download'; payload?: any } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'delete' | 'download' | 'download-pdf' | 'bulk-delete' | 'bulk-download' | 'bulk-download-pdf'; payload?: any } | null>(null);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -2764,7 +2766,7 @@ function QCHistoryView() {
     }
   };
 
-  const runWithAdminCheck = (actionType: 'delete' | 'download' | 'bulk-delete' | 'bulk-download', actionPayload?: any) => {
+  const runWithAdminCheck = (actionType: 'delete' | 'download' | 'download-pdf' | 'bulk-delete' | 'bulk-download' | 'bulk-download-pdf', actionPayload?: any) => {
     if (isAdminVerified) {
       executeAdminAction(actionType, actionPayload);
     } else {
@@ -2772,6 +2774,126 @@ function QCHistoryView() {
       setPasswordInput('');
       setPasswordError('');
       setShowPasswordModal(true);
+    }
+  };
+
+  const formatDate = (dateVal: any) => {
+    if (!dateVal) return '';
+    if (typeof dateVal === 'string') return dateVal;
+    if (dateVal && typeof dateVal.toDate === 'function') {
+      try {
+        return dateVal.toDate().toISOString().split('T')[0];
+      } catch (e) {
+        console.error('Error formatting date:', e);
+      }
+    }
+    return String(dateVal);
+  };
+
+  const generateAndDownloadHistoryPdf = async (reportData: any) => {
+    setIsGeneratingPdf(true);
+    try {
+      setPdfGeneratingReport(reportData);
+      // Wait for React to render the component into the DOM
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const reportElement = document.getElementById('history-report-to-pdf');
+      if (!reportElement) {
+        throw new Error("PDF layout container element not found");
+      }
+
+      // Preserve styles
+      const originalWidth = reportElement.style.width;
+      const originalMinWidth = reportElement.style.minWidth;
+      const originalMaxWidth = reportElement.style.maxWidth;
+
+      reportElement.classList.add('is-generating-pdf');
+      reportElement.style.width = '1200px';
+      reportElement.style.minWidth = '1200px';
+      reportElement.style.maxWidth = '1200px';
+      
+      const imgData = await htmlToImage.toJpeg(reportElement, {
+        quality: 0.98,
+        backgroundColor: '#ffffff',
+        pixelRatio: 2.5,
+      });
+
+      // Restore styles
+      reportElement.classList.remove('is-generating-pdf');
+      reportElement.style.width = originalWidth;
+      reportElement.style.minWidth = originalMinWidth;
+      reportElement.style.maxWidth = originalMaxWidth;
+
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const destWidth = pdfWidth - (margin * 2);
+
+      const imgProps = pdf.getImageProperties(imgData);
+      const ratio = destWidth / imgProps.width;
+      const destHeight = imgProps.height * ratio;
+
+      const pageHeightLimit = pdfHeight - (margin * 2);
+
+      if (destHeight <= pageHeightLimit) {
+        pdf.addImage(imgData, 'JPEG', margin, margin, destWidth, destHeight);
+      } else {
+        let heightLeft = destHeight;
+        let position = margin;
+        let pageNumber = 1;
+
+        pdf.addImage(imgData, 'JPEG', margin, position, destWidth, destHeight);
+        heightLeft -= pageHeightLimit;
+
+        while (heightLeft > 0) {
+          position = margin - (pageHeightLimit * pageNumber);
+          pdf.addPage();
+          pdf.addImage(imgData, 'JPEG', margin, position, destWidth, destHeight);
+          heightLeft -= pageHeightLimit;
+          pageNumber++;
+        }
+      }
+      
+      const pdfBlob = pdf.output('blob');
+      const filename = `QC_Report_${reportData.qcNo || 'Export'}.pdf`;
+
+      // median printer check
+      const printer = (window as any).gonative?.printer || (window as any).median?.printer;
+      if (printer && typeof printer.print === 'function') {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          printer.print({ url: reader.result as string });
+        };
+        reader.readAsDataURL(pdfBlob);
+      } else {
+        const reader = new FileReader();
+        const promise = new Promise<void>((resolve) => {
+          reader.onloadend = () => {
+            const base64 = reader.result as string;
+            const link = document.createElement('a');
+            link.href = base64;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            resolve();
+          };
+        });
+        reader.readAsDataURL(pdfBlob);
+        await promise;
+      }
+    } catch (error) {
+      console.error("PDF generation failed:", error);
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPdfGeneratingReport(null);
+      setIsGeneratingPdf(false);
     }
   };
 
@@ -2802,6 +2924,8 @@ function QCHistoryView() {
       }
     } else if (type === 'download' && payload) {
       exportToExcel(payload);
+    } else if (type === 'download-pdf' && payload) {
+      await generateAndDownloadHistoryPdf(payload);
     } else if (type === 'bulk-delete') {
       if (selectedIds.size === 0) return;
       if (!window.confirm(`Are you sure you want to delete ${selectedIds.size} reports from history? This action cannot be undone.`)) return;
@@ -2832,6 +2956,17 @@ function QCHistoryView() {
           exportToExcel(report);
         }
       });
+    } else if (type === 'bulk-download-pdf') {
+      if (selectedIds.size === 0) return;
+      setActionSuccess('Beginning bulk PDF download...');
+      for (const id of Array.from(selectedIds)) {
+        const report = reports.find(r => r.id === id || r.qcNo === id);
+        if (report) {
+          await generateAndDownloadHistoryPdf(report);
+          await new Promise(r => setTimeout(r, 600));
+        }
+      }
+      setActionSuccess('All selected PDFs downloaded successfully.');
     }
   };
 
@@ -2968,10 +3103,16 @@ function QCHistoryView() {
               </div>
               <div className="flex items-center gap-3">
                 <button 
+                  onClick={() => runWithAdminCheck('bulk-download-pdf')}
+                  className="flex items-center gap-2 bg-[#2563eb] text-white px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-[#1d4ed8] transition-all"
+                >
+                  <FileText size={14} /> Download Selected (PDF)
+                </button>
+                <button 
                   onClick={() => runWithAdminCheck('bulk-download')}
                   className="flex items-center gap-2 bg-white text-[#141414] px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:invert transition-all"
                 >
-                  <Download size={14} /> Download Selected
+                  <Download size={14} /> Download Selected (Excel)
                 </button>
                 <button 
                   onClick={() => runWithAdminCheck('bulk-delete')}
@@ -3019,10 +3160,17 @@ function QCHistoryView() {
                         <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 group-hover:opacity-60">Record ID</span>
                         <h4 className="text-xl font-black uppercase tracking-tight">{report.qcNo}</h4>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 relative z-10">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); runWithAdminCheck('download-pdf', report); }}
+                          className="p-3 bg-[#2563eb] border border-transparent text-white hover:bg-[#1d4ed8] transition-all flex items-center justify-center"
+                          title="Save QC (PDF)"
+                        >
+                          <FileText size={16} />
+                        </button>
                         <button 
                           onClick={(e) => { e.stopPropagation(); runWithAdminCheck('download', report); }}
-                          className="p-3 bg-[#141414] text-white border border-white/20 hover:bg-white hover:text-[#141414] transition-all"
+                          className="p-3 bg-[#141414] text-white border border-white/20 group-hover:border-white/50 hover:bg-white hover:text-[#141414] transition-all flex items-center justify-center"
                           title="Export to Excel"
                         >
                           <Download size={16} />
@@ -3098,6 +3246,12 @@ function QCHistoryView() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => runWithAdminCheck('download-pdf', selectedReport)}
+                    className="flex items-center gap-2 px-6 py-2 bg-[#2563eb] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#1d4ed8] transition-all"
+                  >
+                    <FileText size={14} /> Save QC (PDF)
+                  </button>
                   <button 
                     onClick={() => runWithAdminCheck('download', selectedReport)}
                     className="flex items-center gap-2 px-6 py-2 bg-[#141414] text-white text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all"
@@ -3300,6 +3454,183 @@ function QCHistoryView() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Hidden container for PDF rendering */}
+      <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: '1200px', overflow: 'hidden' }} aria-hidden="true">
+        {pdfGeneratingReport && (
+          <div id="history-report-to-pdf" className="w-full bg-white border-2 border-[#141414] p-12 relative">
+            
+            <div className="text-center py-6 mb-8 border-b-4 border-double border-[#141414] relative overflow-hidden bg-gray-50/50">
+              <span className="absolute top-0 left-0 w-full h-[1px] bg-[#141414]/10" />
+              <h1 className="text-4xl font-black uppercase tracking-[0.4em] inline-block relative px-4">
+                <span className="absolute -left-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
+                Return QC Report (GRN)
+                <span className="absolute -right-2 top-1/2 -translate-y-1/2 w-1 h-full bg-[#141414]" />
+              </h1>
+            </div>
+            
+            {/* Header Metadata */}
+            <div className="border-2 border-[#141414] mb-8 bg-white grid grid-cols-4 col-span-full">
+              {/* Cell 1: QC.NO */}
+              <div className="p-3 border-b-2 border-r-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">QC.NO</label>
+                <div className="font-mono text-sm font-bold">{pdfGeneratingReport.qcNo}</div>
+              </div>
+              {/* Cell 2: LR NO */}
+              <div className="p-3 border-b-2 border-r-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">LR NO</label>
+                <div className="font-mono text-sm font-bold">{pdfGeneratingReport.lrNo}</div>
+              </div>
+              {/* Cell 3: DATE */}
+              <div className="p-3 border-b-2 border-r-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">DATE</label>
+                <div className="font-mono text-sm font-bold">{formatDate(pdfGeneratingReport.date)}</div>
+              </div>
+              {/* Cell 4: BOX QTY */}
+              <div className="p-3 border-b-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">BOX QTY</label>
+                <div className="font-mono text-sm font-bold">{pdfGeneratingReport.boxQty}</div>
+              </div>
+
+              {/* Cell 5: RTV NO/PO NO */}
+              <div className="p-3 border-r-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">RTV NO/PO NO</label>
+                <div className="font-mono text-sm font-bold">{pdfGeneratingReport.rtvNoPoNo}</div>
+              </div>
+              {/* Cell 6: DN Date */}
+              <div className="p-3 border-r-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">DN Date</label>
+                <div className="font-mono text-sm font-bold">{formatDate(pdfGeneratingReport.dnDate)}</div>
+              </div>
+              {/* Cell 7: RTV Amount */}
+              <div className="p-3 border-r-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">RTV Amount</label>
+                <div className="font-mono text-sm font-bold">{pdfGeneratingReport.rtvAmount}</div>
+              </div>
+              {/* Cell 8: Transporter */}
+              <div className="p-3">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">Transporter</label>
+                <div className="font-mono text-sm font-bold">{pdfGeneratingReport.transporter}</div>
+              </div>
+
+              {/* Note & Narration Row */}
+              <div className="col-span-full p-3 border-t-2 border-[#141414]">
+                <label className="text-[9px] font-black uppercase block opacity-40 mb-1">Note & Narration</label>
+                <div className="text-sm border-none bg-transparent">{pdfGeneratingReport.noteNarration || 'N/A'}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-4 border-2 border-[#141414] mb-6 bg-white shrink-0">
+              <div className="col-span-2 p-4 flex items-center gap-4 border-r-2 border-[#141414]">
+                <label className="text-[11px] font-bold uppercase whitespace-nowrap">Party Name:</label>
+                <div className="text-base font-semibold font-black uppercase">{pdfGeneratingReport.partyName}</div>
+              </div>
+              <div className="p-4 flex items-center gap-4 border-r-2 border-[#141414]">
+                <label className="text-[11px] font-bold uppercase whitespace-nowrap">State:</label>
+                <div className="text-base font-semibold font-black uppercase">{pdfGeneratingReport.state}</div>
+              </div>
+              <div className="p-4 flex items-center gap-4">
+                <label className="text-[11px] font-bold uppercase whitespace-nowrap">City:</label>
+                <div className="text-base font-semibold font-black uppercase">{pdfGeneratingReport.city || ''}</div>
+              </div>
+            </div>
+
+            {/* QC Table */}
+            <div className="border-2 border-[#141414] overflow-x-auto">
+              <table className="w-full border-collapse text-[10px]">
+                <thead>
+                  <tr className="bg-gray-100 font-bold uppercase border-b-2 border-[#141414]">
+                    <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-2 text-center w-10">S.No</th>
+                    <th rowSpan={2} className="border-r-2 border-b-2 border-[#141414] p-2 min-w-[80px]">Old SKU</th>
+                    <th rowSpan={2} className="border-r-2 border-b-2 border-[#141414] p-2 min-w-[100px]">New SKU</th>
+                    <th className="border-r border-b border-[#141414] p-1 text-center">Bill Qty</th>
+                    <th className="border-r border-b border-[#141414] p-1 text-center font-bold">Received</th>
+                    <th className="border-r border-b border-[#141414] p-1 text-center font-bold">Not Received</th>
+                    <th className="border-r border-b border-[#141414] p-1 text-center text-orange-600 bg-orange-50/50 font-bold">Expired</th>
+                    <th colSpan={2} className="border-r border-b border-[#141414] p-1 text-center font-bold">DAMAGE ITEM</th>
+                    <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-1 text-center">Use</th>
+                    <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-1 min-w-[80px] text-center font-bold">Batch Code</th>
+                    <th className="border-r border-b border-[#141414] p-1 text-center font-bold">MFG</th>
+                    <th className="border-b border-[#141414] p-1 text-center font-bold">EXP</th>
+                  </tr>
+                  <tr className="bg-gray-100 text-[8px] border-b-2 border-[#141414]">
+                    <th className="border-r border-[#141414] p-1 uppercase opacity-60 text-center font-bold">Unit</th>
+                    <th className="border-r border-[#141414] p-1 uppercase opacity-60 text-center font-bold">Unit</th>
+                    <th className="border-r border-[#141414] p-1 uppercase opacity-60 text-center font-bold">Unit</th>
+                    <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-orange-100/50 text-orange-700 text-center font-bold">Unit</th>
+                    <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-green-50/50 text-center font-bold">Repairable</th>
+                    <th className="border-r border-[#141414] p-1 uppercase opacity-60 bg-red-50/50 text-center font-bold">Non Repairable</th>
+                    <th className="border-r border-[#141414] p-1 uppercase opacity-40 text-center font-bold">Date</th>
+                    <th className="uppercase opacity-40 text-center font-bold">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pdfGeneratingReport.rows?.map((row: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-black/5">
+                      <td className="p-2 border-r border-b border-[#141414] font-black text-center font-mono text-gray-500 bg-gray-50/50 w-10">
+                        {idx + 1}
+                      </td>
+                      <td className="p-2 border-r-2 border-b border-[#141414] font-bold uppercase bg-gray-50/30">
+                        {row.oldSku}
+                      </td>
+                      <td className="p-2 border-r-2 border-b border-[#141414] font-mono text-[9px] uppercase">{row.newSku}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center font-bold">{row.billQtyUnit || 0}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center font-bold">{row.receivedUnit || 0}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center font-bold">{row.notReceivedUnit || 0}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center font-bold text-orange-700 bg-orange-50/20">{row.expiredUnit || 0}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center font-bold text-green-700 bg-green-50/20">{row.damagesRepairable || 0}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center font-bold text-red-700 bg-red-50/20">{row.rejectNonRepairable || 0}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center uppercase">{row.use || ''}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center font-mono uppercase">{row.batchCode || ''}</td>
+                      <td className="border-r border-b border-[#141414] p-2 text-center text-[10px]">{row.mfgDate || ''}</td>
+                      <td className="border-b border-[#141414] p-2 text-center text-[10px]">{row.expDate || ''}</td>
+                    </tr>
+                  ))}
+                  {/* Visual padding rows */}
+                  {Array.from({ length: Math.max(0, 17 - (pdfGeneratingReport.rows?.length || 0)) }).map((_, i) => (
+                    <tr key={`empty-${i}`} className="h-10">
+                      <td className="border-r border-b border-[#141414]/10 w-10 bg-gray-50/10"></td>
+                      <td className="border-r-2 border-b border-[#141414]/10 bg-gray-50/10"></td>
+                      <td className="border-r-2 border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-r border-b border-[#141414]/10"></td>
+                      <td className="border-b border-[#141414]/10"></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-8 flex justify-between items-end border-t-2 border-[#141414] pt-8 gap-6">
+              <div className="flex border-2 border-[#141414] divide-x-2 divide-[#141414]">
+                <div className="p-4 w-48 bg-gray-50 flex flex-col justify-between min-h-[80px]">
+                  <span className="text-[9px] font-bold uppercase opacity-50">Approve By</span>
+                  <span className="text-[9px] font-bold uppercase opacity-50">Signature</span>
+                </div>
+                <div className="p-4 flex-1 w-64 flex flex-col justify-between min-h-[80px]">
+                  <div className="font-serif italic text-lg leading-relaxed">{pdfGeneratingReport.approvedBy}</div>
+                </div>
+              </div>
+            </div>
+            
+          </div>
+        )}
+      </div>
+
+      {isGeneratingPdf && (
+        <div className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-md flex flex-col items-center justify-center gap-4 text-white">
+          <RefreshCw className="animate-spin text-white mb-2" size={40} />
+          <h3 className="text-lg font-black uppercase tracking-widest">Generating Clean PDF</h3>
+          <p className="text-xs opacity-60 uppercase tracking-widest">Applying double-margins, typography pairings, and signatures...</p>
+        </div>
+      )}
     </div>
   );
 }
