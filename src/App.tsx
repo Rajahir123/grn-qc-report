@@ -28,7 +28,8 @@ import {
   ArrowLeft,
   History,
   Download,
-  Loader2
+  Loader2,
+  Sliders
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -358,12 +359,42 @@ interface MondayContextType {
   submitReport: (report: QCReport) => Promise<void>;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncError: string | null;
-  activeView: 'builder' | 'monitor' | 'dashboard';
-  setActiveView: (view: 'builder' | 'monitor' | 'dashboard') => void;
+  activeView: 'builder' | 'monitor' | 'dashboard' | 'history';
+  setActiveView: (view: 'builder' | 'monitor' | 'dashboard' | 'history') => void;
   customEmbedUrls: Record<string, string>;
   setCustomEmbedUrl: (boardId: string, url: string) => void;
   logout: () => void;
+  pdfSettings: PDFSettings;
+  setPdfSettings: React.Dispatch<React.SetStateAction<PDFSettings>>;
 }
+
+export interface PDFSettings {
+  margin: number;
+  padding: number;
+  titleSize: number;
+  labelSize: number;
+  metadataInputSize: number;
+  thSize: number;
+  th2Size: number;
+  tdSize: number;
+  inputSize: number;
+  rowPaddingY: number;
+  rowPaddingX: number;
+}
+
+export const DEFAULT_PDF_SETTINGS: PDFSettings = {
+  margin: 2,
+  padding: 1.5,
+  titleSize: 2.25,
+  labelSize: 15,
+  metadataInputSize: 19,
+  thSize: 13,
+  th2Size: 11,
+  tdSize: 14,
+  inputSize: 14,
+  rowPaddingY: 10,
+  rowPaddingX: 4
+};
 
 const MondayContext = createContext<MondayContextType | undefined>(undefined);
 
@@ -532,7 +563,23 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<'builder' | 'monitor' | 'dashboard'>('builder');
+  const [activeView, setActiveView] = useState<'builder' | 'monitor' | 'dashboard' | 'history'>('builder');
+
+  const [pdfSettings, setPdfSettings] = useState<PDFSettings>(() => {
+    try {
+      const stored = localStorage.getItem('qc_pdf_settings');
+      if (stored) {
+        return { ...DEFAULT_PDF_SETTINGS, ...JSON.parse(stored) };
+      }
+    } catch (e) {
+      console.error("Failed to parse pdf settings", e);
+    }
+    return DEFAULT_PDF_SETTINGS;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('qc_pdf_settings', JSON.stringify(pdfSettings));
+  }, [pdfSettings]);
 
   const logout = () => {
     setToken(null);
@@ -928,7 +975,9 @@ ${report.rows.map(r => `| ${r.oldSku} | ${r.newSku} | ${r.billQtyUnit} | ${r.rec
       setActiveView,
       customEmbedUrls,
       setCustomEmbedUrl,
-      logout
+      logout,
+      pdfSettings,
+      setPdfSettings
     }}>
       {children}
     </MondayContext.Provider>
@@ -1207,9 +1256,14 @@ function Sidebar({
   isMinimized: boolean; 
   onToggleMinimize: () => void;
 }) {
-  const { boards, setSelectedBoardId, selectedBoardId, logout, activeView, setActiveView } = useMonday();
+  const { boards, setSelectedBoardId, selectedBoardId, logout, activeView, setActiveView, pdfSettings, setPdfSettings } = useMonday();
   const [searchTerm, setSearchTerm] = useState('');
   const [manualId, setManualId] = useState('');
+  const [showPdfSettings, setShowPdfSettings] = useState(false);
+
+  const resetPdfSettings = () => {
+    setPdfSettings(DEFAULT_PDF_SETTINGS);
+  };
 
   const filteredBoards = boards.filter(b => b.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
@@ -1338,6 +1392,196 @@ function Sidebar({
         </div>
 
         <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-200 ${isMinimized ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+          {!isMinimized && (
+            <div className="border-b border-[#141414]/15 bg-white/20">
+              <button 
+                onClick={() => setShowPdfSettings(!showPdfSettings)}
+                className="w-full px-6 py-3.5 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-[#141414]/70 hover:bg-white/40 transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  <Sliders size={12} className="text-[#141414]/50" /> PDF Format Resizing
+                </span>
+                <span className="text-[8px] opacity-60 font-mono">{showPdfSettings ? 'Collapse [-]' : 'Expand [+]'}</span>
+              </button>
+              <AnimatePresence>
+                {showPdfSettings && (
+                  <motion.div 
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden border-t border-[#141414]/10 bg-white/40 px-6 py-4 space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar"
+                  >
+                    <div className="flex items-center justify-between border-b border-[#141414]/5 pb-2">
+                      <span className="text-[10px] uppercase font-bold text-[#141414]/50">Format Sliders</span>
+                      <button 
+                        onClick={resetPdfSettings}
+                        type="button"
+                        className="text-[9px] font-black uppercase tracking-wider text-red-600 hover:underline"
+                      >
+                        Reset Defaults
+                      </button>
+                    </div>
+
+                    <div className="space-y-3.5">
+                      {/* Side Margin */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Side Margin</span>
+                          <span className="font-mono">{pdfSettings.margin}mm</span>
+                        </div>
+                        <input 
+                          type="range" min="0" max="15" step="1"
+                          value={pdfSettings.margin}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, margin: parseInt(e.target.value) || 0 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Sheet Padding */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Sheet Padding</span>
+                          <span className="font-mono">{pdfSettings.padding}rem</span>
+                        </div>
+                        <input 
+                          type="range" min="0.5" max="3" step="0.1"
+                          value={pdfSettings.padding}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, padding: parseFloat(e.target.value) || 1.5 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Title Font Size */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Title Size</span>
+                          <span className="font-mono">{pdfSettings.titleSize}rem</span>
+                        </div>
+                        <input 
+                          type="range" min="1.5" max="3.5" step="0.05"
+                          value={pdfSettings.titleSize}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, titleSize: parseFloat(e.target.value) || 2.25 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Metadata Header Label */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Cell Label Size</span>
+                          <span className="font-mono">{pdfSettings.labelSize}px</span>
+                        </div>
+                        <input 
+                          type="range" min="10" max="22" step="1"
+                          value={pdfSettings.labelSize}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, labelSize: parseInt(e.target.value) || 15 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Metadata Input Font */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Cell Values Font</span>
+                          <span className="font-mono">{pdfSettings.metadataInputSize}px</span>
+                        </div>
+                        <input 
+                          type="range" min="12" max="26" step="1"
+                          value={pdfSettings.metadataInputSize}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, metadataInputSize: parseInt(e.target.value) || 19 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Table Primary Header */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Table Header Size</span>
+                          <span className="font-mono">{pdfSettings.thSize}px</span>
+                        </div>
+                        <input 
+                          type="range" min="9" max="20" step="1"
+                          value={pdfSettings.thSize}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, thSize: parseInt(e.target.value) || 13 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Table Secondary Header */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Table Sub-head Size</span>
+                          <span className="font-mono">{pdfSettings.th2Size}px</span>
+                        </div>
+                        <input 
+                          type="range" min="8" max="18" step="1"
+                          value={pdfSettings.th2Size}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, th2Size: parseInt(e.target.value) || 11 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Table Body Text */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Table Text Size</span>
+                          <span className="font-mono">{pdfSettings.tdSize}px</span>
+                        </div>
+                        <input 
+                          type="range" min="9" max="20" step="1"
+                          value={pdfSettings.tdSize}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, tdSize: parseInt(e.target.value) || 14 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Table Inputs Text */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Table Input Size</span>
+                          <span className="font-mono">{pdfSettings.inputSize}px</span>
+                        </div>
+                        <input 
+                          type="range" min="10" max="20" step="1"
+                          value={pdfSettings.inputSize}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, inputSize: parseInt(e.target.value) || 14 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Row Padding Y */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Table Row Pad Y</span>
+                          <span className="font-mono">{pdfSettings.rowPaddingY}px</span>
+                        </div>
+                        <input 
+                          type="range" min="4" max="20" step="1"
+                          value={pdfSettings.rowPaddingY}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, rowPaddingY: parseInt(e.target.value) || 10 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Row Padding X */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold text-[#141414]/70">
+                          <span>Table Row Pad X</span>
+                          <span className="font-mono">{pdfSettings.rowPaddingX}px</span>
+                        </div>
+                        <input 
+                          type="range" min="1" max="15" step="1"
+                          value={pdfSettings.rowPaddingX}
+                          onChange={(e) => setPdfSettings(prev => ({ ...prev, rowPaddingX: parseInt(e.target.value) || 4 }))}
+                          className="w-full accent-[#141414] cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
           {activeView === 'builder' ? (
             <>
               <div className="p-4 border-b border-[#141414]/10 bg-white/10">
@@ -1483,7 +1727,7 @@ function TabButton({ active, onClick, isMinimized, icon, label }: any) {
 
 
 function QCReportView() {
-  const { submitReport, syncStatus, syncError, boardData, logout, selectedBoardId } = useMonday();
+  const { submitReport, syncStatus, syncError, boardData, logout, selectedBoardId, pdfSettings } = useMonday();
   const [report, setReport] = useState<QCReport>({
     qcNo: 'QC-',
     lrNo: '',
@@ -1743,34 +1987,81 @@ function QCReportView() {
     const reportElement = document.getElementById('report-to-pdf');
     if (!reportElement) return null;
 
-    // Save current status of the element to restore cleanly
-    const originalWidth = reportElement.style.width;
-    const originalMinWidth = reportElement.style.minWidth;
-    const originalMaxWidth = reportElement.style.maxWidth;
-    const hadIsGeneratingPdf = reportElement.classList.contains('is-generating-pdf');
-    const hadMobileZoomOut = reportElement.classList.contains('mobile-zoom-out');
+    // Create off-screen cloned tree to prevent layout constraints, flex-containers, or viewport compression from clipping the PDF
+    const clone = reportElement.cloneNode(true) as HTMLElement;
+    clone.id = 'report-to-pdf-clone';
+    clone.classList.add('is-generating-pdf');
+    clone.classList.remove('mobile-zoom-out');
 
-    // Force perfect desktop size layout synchronously
-    reportElement.classList.add('is-generating-pdf');
-    reportElement.classList.remove('mobile-zoom-out');
-    reportElement.style.width = '1200px';
-    reportElement.style.minWidth = '1200px';
-    reportElement.style.maxWidth = '1200px';
+    // Completely remove delete row buttons and non-printable items inside the clone
+    const removeSelectors = ['.print\\:hidden', 'button.text-red-500', 'svg.lucide-trash2', 'svg.lucide-chevron-down'];
+    removeSelectors.forEach(selector => {
+      clone.querySelectorAll(selector).forEach(el => el.remove());
+    });
+
+    // Mirror current real value of inputs/textareas to the cloned elements since cloneNode doesn't copy values
+    const originalInputs = reportElement.querySelectorAll('input, select, textarea');
+    const clonedInputs = clone.querySelectorAll('input, select, textarea');
+    originalInputs.forEach((input, index) => {
+      const oVal = (input as HTMLInputElement | HTMLTextAreaElement).value;
+      const cInput = clonedInputs[index] as HTMLInputElement | HTMLTextAreaElement;
+      if (cInput) {
+        cInput.value = oVal || '';
+        // If it is a checkbox/radio, sync checked status as well
+        if (input instanceof HTMLInputElement && cInput instanceof HTMLInputElement) {
+          cInput.checked = input.checked;
+        }
+      }
+    });
+
+    // Create an unconstrained container block at the absolute body level
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = '-9999px';
+    wrapper.style.top = '-9999px';
+    wrapper.style.width = '1200px';
+    wrapper.style.minWidth = '1200px';
+    wrapper.style.maxWidth = '1200px';
+    wrapper.style.overflow = 'hidden';
+    wrapper.style.backgroundColor = '#ffffff';
+    wrapper.style.boxSizing = 'border-box';
+
+    // Style the clone element to align beautifully and fill the 1200px base canvas
+    clone.style.width = '1200px';
+    clone.style.minWidth = '1200px';
+    clone.style.maxWidth = '1200px';
+    clone.style.boxSizing = 'border-box';
+    clone.style.padding = `${pdfSettings?.padding ?? 1.5}rem`; // Balanced margins instead of wasting layout width
+    clone.style.margin = '0';
+    clone.style.backgroundColor = '#ffffff';
+
+    // Inject dynamic layout and text resizing CSS custom properties
+    clone.style.setProperty('--pdf-padding', `${pdfSettings?.padding ?? 1.5}rem`);
+    clone.style.setProperty('--pdf-title-size', `${pdfSettings?.titleSize ?? 2.25}rem`);
+    clone.style.setProperty('--pdf-label-size', `${pdfSettings?.labelSize ?? 15}px`);
+    clone.style.setProperty('--pdf-metadata-input-size', `${pdfSettings?.metadataInputSize ?? 19}px`);
+    clone.style.setProperty('--pdf-th-size', `${pdfSettings?.thSize ?? 13}px`);
+    clone.style.setProperty('--pdf-th2-size', `${pdfSettings?.th2Size ?? 11}px`);
+    clone.style.setProperty('--pdf-td-size', `${pdfSettings?.tdSize ?? 14}px`);
+    clone.style.setProperty('--pdf-input-size', `${pdfSettings?.inputSize ?? 14}px`);
+    clone.style.setProperty('--pdf-row-padding-y', `${pdfSettings?.rowPaddingY ?? 10}px`);
+    clone.style.setProperty('--pdf-row-padding-x', `${pdfSettings?.rowPaddingX ?? 4}px`);
+
+    wrapper.appendChild(clone);
+    document.body.appendChild(wrapper);
     
     try {
-      // Use htmlToImage to capture the beautifully formatted desktop-layout live element
-      const imgData = await htmlToImage.toJpeg(reportElement, {
+      // Short delay to let the layout engine settle
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const imgData = await htmlToImage.toJpeg(clone, {
         quality: 0.98,
         backgroundColor: '#ffffff',
         pixelRatio: 2.5,
       });
 
-      // Restore original container styles immediately after capture to avoid screen flickering
-      if (!hadIsGeneratingPdf) reportElement.classList.remove('is-generating-pdf');
-      if (hadMobileZoomOut) reportElement.classList.add('mobile-zoom-out');
-      reportElement.style.width = originalWidth;
-      reportElement.style.minWidth = originalMinWidth;
-      reportElement.style.maxWidth = originalMaxWidth;
+      // Cleanup cloned node immediately
+      document.body.removeChild(wrapper);
 
       const pdf = new jsPDF({
         orientation: 'p',
@@ -1778,26 +2069,22 @@ function QCReportView() {
         format: 'a4',
       });
 
-      const pdfWidth = pdf.internal.pageSize.getWidth(); // JSpdf A4: 210mm
-      const pdfHeight = pdf.internal.pageSize.getHeight(); // JSpdf A4: 297mm
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // A4: 210mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // A4: 297mm
 
-      // Configure clean margins (10mm is standard for professional documents)
-      const margin = 10;
-      const destWidth = pdfWidth - (margin * 2); // 190mm
+      // Setup symmetric elegant borders (from customizable user settings)
+      const margin = pdfSettings?.margin ?? 2;
+      const destWidth = pdfWidth - (margin * 2);
       
-      // Get the properties of the captured canvas image
       const imgProps = pdf.getImageProperties(imgData);
       const ratio = destWidth / imgProps.width;
       const destHeight = imgProps.height * ratio;
 
-      const pageHeightLimit = pdfHeight - (margin * 2); // 277mm
+      const pageHeightLimit = pdfHeight - (margin * 2);
 
       if (destHeight <= pageHeightLimit) {
-        // Fits perfectly on a single page, clean top alignment for a professional A4 look
-        const yOffset = margin;
-        pdf.addImage(imgData, 'JPEG', margin, yOffset, destWidth, destHeight);
+        pdf.addImage(imgData, 'JPEG', margin, margin, destWidth, destHeight);
       } else {
-        // Multi-page splitting! Spans multiple pages beautifully without compressing or cropping
         let heightLeft = destHeight;
         let position = margin;
         let pageNumber = 1;
@@ -1817,7 +2104,6 @@ function QCReportView() {
       const pdfBlob = pdf.output('blob');
       const filename = `QC_Report_${report.qcNo || 'Export'}.pdf`;
 
-      // Convert to base64
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -1831,12 +2117,9 @@ function QCReportView() {
       });
     } catch (e) {
       console.error("Error generating PDF:", e);
-      // Ensure we restore original styles even on failure
-      if (!hadIsGeneratingPdf) reportElement.classList.remove('is-generating-pdf');
-      if (hadMobileZoomOut) reportElement.classList.add('mobile-zoom-out');
-      reportElement.style.width = originalWidth;
-      reportElement.style.minWidth = originalMinWidth;
-      reportElement.style.maxWidth = originalMaxWidth;
+      if (document.body.contains(wrapper)) {
+        document.body.removeChild(wrapper);
+      }
       throw e;
     }
   };
@@ -1844,15 +2127,6 @@ function QCReportView() {
   const handlePrint = async () => {
     const isMedianApp = !!((window as any).gonative || (window as any).median);
     const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-    if (!isMedianApp && !isMobileDevice) {
-      try {
-        window.print();
-        return;
-      } catch (e) {
-        console.error('Window print failed, falling back to PDF generation:', e);
-      }
-    }
 
     try {
       setIsGeneratingPdf(true);
@@ -1875,7 +2149,31 @@ function QCReportView() {
         return;
       }
 
-      // 3. Fallback to HTML5 sharing or base64 download if on generic mobile WebView
+      // 3. For standard desktop browser (not Mobile and not Median App)
+      if (!isMobileDevice) {
+        const fileUrl = URL.createObjectURL(blob);
+        const iframe = document.createElement('iframe');
+        iframe.style.position = 'fixed';
+        iframe.style.right = '0';
+        iframe.style.bottom = '0';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = 'none';
+        iframe.src = fileUrl;
+        document.body.appendChild(iframe);
+        iframe.onload = () => {
+          try {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+          } catch (e) {
+            console.error('Iframe print failed, fallback:', e);
+            window.open(fileUrl, '_blank');
+          }
+        };
+        return;
+      }
+
+      // 4. Fallback to HTML5 sharing or base64 download if on generic mobile WebView
       const file = new File([blob], filename, { type: 'application/pdf' });
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
@@ -2421,6 +2719,21 @@ function QCReportView() {
           {/* QC Table */}
           <div className="border-2 border-[#141414] overflow-x-auto custom-scrollbar">
             <table className="w-full border-collapse text-[9px] lg:text-[10px] min-w-[800px]">
+              <colgroup>
+                <col style={{ width: '3.5%' }} />
+                <col style={{ width: '8.5%' }} />
+                <col style={{ width: '8.5%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '7.5%' }} />
+                <col style={{ width: '9.5%' }} />
+                <col style={{ width: '10.5%' }} />
+                <col style={{ width: '4%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '6.5%' }} />
+                <col style={{ width: '6.5%' }} />
+              </colgroup>
               <thead>
                 <tr className="bg-gray-100 font-bold uppercase border-b-2 border-[#141414]">
                   <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-2 text-center w-10">S.No</th>
@@ -2676,6 +2989,7 @@ function AppContent() {
 }
 
 function QCHistoryView() {
+  const { pdfSettings } = useMonday();
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -2792,6 +3106,7 @@ function QCHistoryView() {
 
   const generateAndDownloadHistoryPdf = async (reportData: any) => {
     setIsGeneratingPdf(true);
+    let wrapper: HTMLDivElement | null = null;
     try {
       setPdfGeneratingReport(reportData);
       // Wait for React to render the component into the DOM
@@ -2802,27 +3117,69 @@ function QCHistoryView() {
         throw new Error("PDF layout container element not found");
       }
 
-      // Preserve styles
-      const originalWidth = reportElement.style.width;
-      const originalMinWidth = reportElement.style.minWidth;
-      const originalMaxWidth = reportElement.style.maxWidth;
+      // Clone tree for off-screen A4 layout
+      const clone = reportElement.cloneNode(true) as HTMLElement;
+      clone.id = 'history-report-to-pdf-clone';
+      clone.classList.add('is-generating-pdf');
 
-      reportElement.classList.add('is-generating-pdf');
-      reportElement.style.width = '1200px';
-      reportElement.style.minWidth = '1200px';
-      reportElement.style.maxWidth = '1200px';
+      // Sync form values (labels/div text are already static content in history viewer, but safe to cover)
+      const originalInputs = reportElement.querySelectorAll('input, select, textarea');
+      const clonedInputs = clone.querySelectorAll('input, select, textarea');
+      originalInputs.forEach((input, index) => {
+        const oVal = (input as HTMLInputElement | HTMLTextAreaElement).value;
+        const cInput = clonedInputs[index] as HTMLInputElement | HTMLTextAreaElement;
+        if (cInput) {
+          cInput.value = oVal || '';
+        }
+      });
+
+      // Create physical wrapper
+      wrapper = document.createElement('div');
+      wrapper.style.position = 'absolute';
+      wrapper.style.left = '-9999px';
+      wrapper.style.top = '-9999px';
+      wrapper.style.width = '1200px';
+      wrapper.style.minWidth = '1200px';
+      wrapper.style.maxWidth = '1200px';
+      wrapper.style.overflow = 'hidden';
+      wrapper.style.backgroundColor = '#ffffff';
+      wrapper.style.boxSizing = 'border-box';
+
+      clone.style.width = '1200px';
+      clone.style.minWidth = '1200px';
+      clone.style.maxWidth = '1200px';
+      clone.style.boxSizing = 'border-box';
+      clone.style.padding = `${pdfSettings?.padding ?? 1.5}rem`;
+      clone.style.margin = '0';
+      clone.style.backgroundColor = '#ffffff';
+
+      // Inject dynamic layout and text resizing CSS custom properties
+      clone.style.setProperty('--pdf-padding', `${pdfSettings?.padding ?? 1.5}rem`);
+      clone.style.setProperty('--pdf-title-size', `${pdfSettings?.titleSize ?? 2.25}rem`);
+      clone.style.setProperty('--pdf-label-size', `${pdfSettings?.labelSize ?? 15}px`);
+      clone.style.setProperty('--pdf-metadata-input-size', `${pdfSettings?.metadataInputSize ?? 19}px`);
+      clone.style.setProperty('--pdf-th-size', `${pdfSettings?.thSize ?? 13}px`);
+      clone.style.setProperty('--pdf-th2-size', `${pdfSettings?.th2Size ?? 11}px`);
+      clone.style.setProperty('--pdf-td-size', `${pdfSettings?.tdSize ?? 14}px`);
+      clone.style.setProperty('--pdf-input-size', `${pdfSettings?.inputSize ?? 14}px`);
+      clone.style.setProperty('--pdf-row-padding-y', `${pdfSettings?.rowPaddingY ?? 10}px`);
+      clone.style.setProperty('--pdf-row-padding-x', `${pdfSettings?.rowPaddingX ?? 4}px`);
+
+      wrapper.appendChild(clone);
+      document.body.appendChild(wrapper);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
       
-      const imgData = await htmlToImage.toJpeg(reportElement, {
+      const imgData = await htmlToImage.toJpeg(clone, {
         quality: 0.98,
         backgroundColor: '#ffffff',
         pixelRatio: 2.5,
       });
 
-      // Restore styles
-      reportElement.classList.remove('is-generating-pdf');
-      reportElement.style.width = originalWidth;
-      reportElement.style.minWidth = originalMinWidth;
-      reportElement.style.maxWidth = originalMaxWidth;
+      if (document.body.contains(wrapper)) {
+        document.body.removeChild(wrapper);
+        wrapper = null;
+      }
 
       const pdf = new jsPDF({
         orientation: 'p',
@@ -2832,7 +3189,9 @@ function QCHistoryView() {
 
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
-      const margin = 10;
+      
+      // Symmetric margins (from customizable user settings)
+      const margin = pdfSettings?.margin ?? 2;
       const destWidth = pdfWidth - (margin * 2);
 
       const imgProps = pdf.getImageProperties(imgData);
@@ -2890,6 +3249,9 @@ function QCHistoryView() {
       }
     } catch (error) {
       console.error("PDF generation failed:", error);
+      if (wrapper && document.body.contains(wrapper)) {
+        document.body.removeChild(wrapper);
+      }
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       setPdfGeneratingReport(null);
@@ -3538,6 +3900,21 @@ function QCHistoryView() {
             {/* QC Table */}
             <div className="border-2 border-[#141414] overflow-x-auto">
               <table className="w-full border-collapse text-[10px]">
+                <colgroup>
+                  <col style={{ width: '3.5%' }} />
+                  <col style={{ width: '8.5%' }} />
+                  <col style={{ width: '8.5%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '7.5%' }} />
+                  <col style={{ width: '9.5%' }} />
+                  <col style={{ width: '10.5%' }} />
+                  <col style={{ width: '4%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '6.5%' }} />
+                  <col style={{ width: '6.5%' }} />
+                </colgroup>
                 <thead>
                   <tr className="bg-gray-100 font-bold uppercase border-b-2 border-[#141414]">
                     <th rowSpan={2} className="border-r border-b-2 border-[#141414] p-2 text-center w-10">S.No</th>

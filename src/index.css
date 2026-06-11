@@ -31,14 +31,14 @@
 .is-generating-pdf {
   width: 1200px !important;
   max-width: none !important;
-  padding: 3rem !important; /* Forces lg:p-12 */
+  padding: var(--pdf-padding, 1.5rem) !important; /* Forces perfect spacing and maximizes the useful space of the A4 page */
   box-shadow: none !important;
   border: none !important; /* Completely remove the thick outer card border for standard A4 sheet style */
 }
 
 /* Make header title larger and clean alignment */
 .is-generating-pdf h1 {
-  font-size: 2.25rem !important; /* lg:text-3xl / 4xl */
+  font-size: var(--pdf-title-size, 2.25rem) !important; /* lg:text-3xl / 4xl */
   letter-spacing: 0.35em !important; /* lg:tracking-[0.35em] */
 }
 
@@ -50,7 +50,7 @@
 
 /* Metadata Cell Labels (QC.NO, LR NO, etc) */
 .is-generating-pdf label {
-  font-size: 15px !important;
+  font-size: var(--pdf-label-size, 15px) !important;
   font-weight: 950 !important;
   letter-spacing: 0.12em !important;
   opacity: 0.8 !important;
@@ -66,8 +66,29 @@
   box-shadow: none !important;
   color: #141414 !important;
   opacity: 1 !important;
-  font-size: 19px !important;
+  font-size: var(--pdf-metadata-input-size, 19px) !important;
   font-weight: 800 !important;
+}
+
+/* Hide native calendar picker indicator and spinners in PDF */
+.is-generating-pdf input::-webkit-calendar-picker-indicator {
+  display: none !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: none !important;
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.is-generating-pdf input::-webkit-inner-spin-button,
+.is-generating-pdf input::-webkit-outer-spin-button {
+  display: none !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 /* Custom rule for dropdowns/transporter/party text */
@@ -96,44 +117,76 @@
   font-size: 15px !important;
 }
 
+/* Remove S.No column completely from PDF layout */
+.is-generating-pdf colgroup col:first-child {
+  display: none !important;
+  width: 0 !important;
+  visibility: collapse !important;
+}
+
+.is-generating-pdf table thead tr:first-child th:first-child {
+  display: none !important;
+}
+
+.is-generating-pdf table tbody tr td:first-child {
+  display: none !important;
+}
+
 .is-generating-pdf table thead th {
-  font-size: 16px !important;
+  font-size: var(--pdf-th-size, 13px) !important;
   font-weight: 950 !important;
-  padding: 14px 8px !important;
-  letter-spacing: 0.06em !important;
+  padding: var(--pdf-row-padding-y, 10px) var(--pdf-row-padding-x, 4px) !important;
+  letter-spacing: 0.04em !important;
+  white-space: normal !important;
+  text-align: center !important;
+  vertical-align: middle !important;
 }
 
 /* Table overrides - secondary headers / Sub units (Unit, Date) */
 .is-generating-pdf table thead tr.text-\[8px\] th,
 .is-generating-pdf table thead tr:nth-child(2) th {
-  font-size: 14px !important;
+  font-size: var(--pdf-th2-size, 11px) !important;
   font-weight: 900 !important;
-  padding: 10px 8px !important;
+  padding: calc(var(--pdf-row-padding-y, 10px) - 3px) var(--pdf-row-padding-x, 4px) !important;
+  white-space: normal !important;
+  text-align: center !important;
+  vertical-align: middle !important;
 }
 
 /* Table body row layout sizing */
 .is-generating-pdf table tbody td {
-  padding: 12px 6px !important;
-  font-size: 15px !important;
+  padding: var(--pdf-row-padding-y, 10px) var(--pdf-row-padding-x, 4px) !important;
+  font-size: var(--pdf-td-size, 14px) !important;
 }
 
 /* S.No index column sizing */
 .is-generating-pdf table tbody td.font-black {
-  font-size: 16px !important;
+  font-size: calc(var(--pdf-td-size, 14px) + 2px) !important;
   font-weight: 950 !important;
 }
 
 /* New SKU / Old SKU mono font sizing */
 .is-generating-pdf table tbody td.font-mono {
-  font-size: 15px !important;
+  font-size: calc(var(--pdf-td-size, 14px) + 1px) !important;
   font-weight: 850 !important;
 }
 
 /* Table cell inputs text size */
 .is-generating-pdf table tbody input {
-  font-size: 16px !important;
-  font-weight: 850 !important;
+  font-size: var(--pdf-input-size, 14px) !important;
+  font-weight: 900 !important;
   height: 32px !important;
+  text-align: center !important;
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  color: #141414 !important;
+  opacity: 1 !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
 }
 
 /* Force signature row to be structured in a tidy horizontal line */
@@ -205,8 +258,27 @@
   height: auto !important;
 }
 
+/* Table and element styles for PDF generation - enforcing fixed size to prevent cutting off on A4 */
 .is-generating-pdf table {
   width: 100% !important;
-  table-layout: auto !important;
+  table-layout: fixed !important;
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+}
+
+.is-generating-pdf table thead th {
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  white-space: normal !important;
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+.is-generating-pdf table tbody td {
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  white-space: normal !important;
+  text-align: center !important;
+  vertical-align: middle !important;
 }
 
