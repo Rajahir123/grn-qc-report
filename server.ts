@@ -3,6 +3,7 @@ import path from "path";
 import axios from "axios";
 import dotenv from "dotenv";
 import cors from "cors";
+import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
@@ -151,6 +152,138 @@ app.get("/api/monday/proxy", (req, res) => {
     env: process.env.NODE_ENV,
     hasToken: !!hasValidToken
   });
+});
+
+// Lazy-initialize Gemini SDK
+function getGeminiClient() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not configured in the environment secrets.");
+  }
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
+    },
+  });
+}
+
+/**
+ * AUTOMATED STORYBOARD & PITCH GENERATOR WITH GEMINI OMNI
+ */
+app.post("/api/gemini/generate-pitch", async (req, res) => {
+  try {
+    const { topic, vibe } = req.body;
+    const finalTopic = topic || "Automated Sales Return Quality Control & Monday.com Sync";
+    const finalVibe = vibe || "cyber";
+
+    console.log(`[Gemini] Generating 10s Pitch for topic: "${finalTopic}", vibe: "${finalVibe}"`);
+
+    const ai = getGeminiClient();
+    
+    const prompt = `Create an automated, high-impact 10-second video demo storyboard for the following product/feature topic: "${finalTopic}".
+The video should have the cinematic branding vibe: "${finalVibe}" (e.g. cyber, minimal, corporate, or epic).
+
+The storyboard must be split into exactly 4 sequential segments:
+1. Segment 1 (0.0s - 2.5s): The Disruption Hook. Establish the critical manual, painful problem or error rate.
+2. Segment 2 (2.5s - 5.0s): Automatic SKU / Solution mapping. Show the instant, smart Monday.com resolution.
+3. Segment 3 (5.0s - 7.5s): Secure Verification Gate. Focus on secure Firestore ledger and the "1522" security PIN gate.
+4. Segment 4 (7.5s - 10.0s): Output Calibration & Outro. Focus on the beautiful, responsive single-page PDF print layout and success.
+
+For each of the 4 segments, generate:
+- range: "0.0s - 2.5s", "2.5s - 5.0s", "5.0s - 7.5s", or "7.5s - 10.0s"
+- title: A short punchy title for this segment (e.g., "1. Manual Intake Chaos")
+- voiceover: A super crisp, high-energy voiceover narration sentence (about 10-15 words max) that can be easily spoken in 2.5 seconds.
+- soundType: The ideal sound effect choice for the start of the segment. Choose exactly one of: "swoosh", "scan", "lock", "chime".
+- screenshot: A descriptive guideline for what screenshot or live element of the app to capture (e.g. "Active SKU pairing list with barcodes")
+- instructions: Brief 1-sentence step-by-step instruction on how the user can capture or view this action in the live demo.
+- videoPrompt: A cinematic, high-quality, descriptive scene prompt (about 25-40 words) for AI video generator tools like Veo, Sora, or Runway to create a fitting visual background for this segment in the style of the "${finalVibe}" vibe.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction: "You are an expert tech commercial director and storyboard designer specializing in hyper-compelling 10-second product demo pitches. Always return output strictly matching the requested JSON schema.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            vibe: { type: Type.STRING },
+            frames: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  range: { type: Type.STRING },
+                  title: { type: Type.STRING },
+                  voiceover: { type: Type.STRING },
+                  soundType: { type: Type.STRING, description: "Must be exactly one of: swoosh, scan, lock, chime" },
+                  screenshot: { type: Type.STRING },
+                  instructions: { type: Type.STRING },
+                  videoPrompt: { type: Type.STRING }
+                },
+                required: ["range", "title", "voiceover", "soundType", "screenshot", "instructions", "videoPrompt"]
+              }
+            }
+          },
+          required: ["vibe", "frames"]
+        }
+      }
+    });
+
+    const resultText = response.text;
+    if (!resultText) {
+      throw new Error("Empty response from Gemini.");
+    }
+
+    const data = JSON.parse(resultText);
+    res.json(data);
+  } catch (error: any) {
+    console.error("[Gemini] Pitch generation failed:", error.message);
+    res.status(500).json({ error: "Gemini pitch generation failed", details: error.message });
+  }
+});
+
+/**
+ * AUTOMATED SPEECH SYNTHESIS (GEMINI OMNI TTS)
+ */
+app.post("/api/gemini/synthesize-speech", async (req, res) => {
+  try {
+    const { text, voice } = req.body;
+    if (!text) {
+      return res.status(400).json({ error: "Missing narration text to synthesize" });
+    }
+    const finalVoice = voice || "Zephyr";
+
+    console.log(`[Gemini] Synthesizing TTS audio using voice: ${finalVoice} for text: "${text.substring(0, 40)}..."`);
+
+    const ai = getGeminiClient();
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-flash-tts-preview",
+      contents: [{ parts: [{ text: text }] }],
+      config: {
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: finalVoice },
+          },
+        },
+      },
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) {
+      throw new Error("Failed to extract audio content from Gemini TTS response");
+    }
+
+    res.json({ success: true, audio: base64Audio });
+  } catch (error: any) {
+    console.error("[Gemini] TTS failed:", error.message);
+    res.status(500).json({ error: "Gemini speech synthesis failed", details: error.message });
+  }
 });
 
 // Explicitly handle 404 for missing API routes

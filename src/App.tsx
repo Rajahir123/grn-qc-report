@@ -29,7 +29,13 @@ import {
   History,
   Download,
   Loader2,
-  Sliders
+  Sliders,
+  Workflow,
+  Play,
+  Video,
+  Volume2,
+  Camera,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -359,8 +365,8 @@ interface MondayContextType {
   submitReport: (report: QCReport) => Promise<void>;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
   syncError: string | null;
-  activeView: 'builder' | 'monitor' | 'dashboard' | 'history';
-  setActiveView: (view: 'builder' | 'monitor' | 'dashboard' | 'history') => void;
+  activeView: 'builder' | 'monitor' | 'dashboard' | 'history' | 'playbook';
+  setActiveView: (view: 'builder' | 'monitor' | 'dashboard' | 'history' | 'playbook') => void;
   customEmbedUrls: Record<string, string>;
   setCustomEmbedUrl: (boardId: string, url: string) => void;
   logout: () => void;
@@ -563,7 +569,7 @@ export function MondayProvider({ children }: { children: React.ReactNode }) {
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<'builder' | 'monitor' | 'dashboard' | 'history'>('builder');
+  const [activeView, setActiveView] = useState<'builder' | 'monitor' | 'dashboard' | 'history' | 'playbook'>('builder');
 
   const [pdfSettings, setPdfSettings] = useState<PDFSettings>(() => {
     try {
@@ -1389,6 +1395,13 @@ function Sidebar({
             icon={<History />}
             label="History"
           />
+          <TabButton 
+            active={activeView === 'playbook'} 
+            onClick={() => { setActiveView('playbook'); onClose(); }}
+            isMinimized={isMinimized}
+            icon={<Workflow />}
+            label="Playbook"
+          />
         </div>
 
         <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-200 ${isMinimized ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
@@ -2151,25 +2164,53 @@ function QCReportView() {
 
       // 3. For standard desktop browser (not Mobile and not Median App)
       if (!isMobileDevice) {
-        const fileUrl = URL.createObjectURL(blob);
-        const iframe = document.createElement('iframe');
-        iframe.style.position = 'fixed';
-        iframe.style.right = '0';
-        iframe.style.bottom = '0';
-        iframe.style.width = '0';
-        iframe.style.height = '0';
-        iframe.style.border = 'none';
-        iframe.src = fileUrl;
-        document.body.appendChild(iframe);
-        iframe.onload = () => {
-          try {
-            iframe.contentWindow?.focus();
-            iframe.contentWindow?.print();
-          } catch (e) {
-            console.error('Iframe print failed, fallback:', e);
-            window.open(fileUrl, '_blank');
-          }
-        };
+        const isEmbedded = window.self !== window.top;
+        if (isEmbedded) {
+          // If embedded inside a sandboxed iframe (like AI Studio preview), cross-origin frame print
+          // and window.open are heavily restricted. Download the beautifully styled PDF directly.
+          console.log('App is embedded in iframe. Downloading formatted PDF for printing.');
+          const link = document.createElement('a');
+          link.href = base64;
+          link.download = filename;
+          link.click();
+          return;
+        }
+
+        try {
+          const fileUrl = URL.createObjectURL(blob);
+          const iframe = document.createElement('iframe');
+          iframe.style.position = 'fixed';
+          iframe.style.right = '0';
+          iframe.style.bottom = '0';
+          iframe.style.width = '0';
+          iframe.style.height = '0';
+          iframe.style.border = 'none';
+          iframe.src = fileUrl;
+          document.body.appendChild(iframe);
+          iframe.onload = () => {
+            try {
+              // Try printing, handle any cross-origin/sandbox exception gracefully without throwing
+              if (iframe.contentWindow && 'print' in iframe.contentWindow) {
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
+              } else {
+                throw new Error("contentWindow or print option not accessible");
+              }
+            } catch (e) {
+              console.warn('Iframe print failed or blocked by origin constraints, falling back to direct PDF download.', e);
+              const link = document.createElement('a');
+              link.href = base64;
+              link.download = filename;
+              link.click();
+            }
+          };
+        } catch (e) {
+          console.warn('Setup print iframe failed, falling back to direct PDF download.', e);
+          const link = document.createElement('a');
+          link.href = base64;
+          link.download = filename;
+          link.click();
+        }
         return;
       }
 
@@ -2952,7 +2993,11 @@ function AppContent() {
           <div className="w-8 h-8" /> {/* Spacer */}
         </header>
 
-        {!selectedBoardId ? (
+        {activeView === 'playbook' ? (
+          <div className="flex-1 overflow-hidden w-full flex justify-center">
+            <SystemPlaybookView />
+          </div>
+        ) : !selectedBoardId ? (
           <div className="flex-1 bg-white flex flex-col items-center justify-center p-8 lg:p-12 text-center relative overflow-hidden w-full">
             <div className="w-20 h-20 lg:w-24 lg:h-24 border-4 border-[#141414] flex items-center justify-center mb-8 mx-auto shadow-[12px_12px_0px_0px_rgba(0,0,0,0.05)]">
               <Layout size={32} className="opacity-20 lg:size-[40]" />
@@ -2977,6 +3022,8 @@ function AppContent() {
                 <BoardLiveMonitor />
               ) : activeView === 'history' ? (
                 <QCHistoryView />
+              ) : activeView === 'playbook' ? (
+                <SystemPlaybookView />
               ) : (
                 <Dashboard />
               )}
@@ -4603,6 +4650,1623 @@ function BoardLiveMonitor() {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+// --- SYSTEM WORKFLOW PLAYBOOK & DEMO VIDEO SIMULATOR ---
+
+function SystemPlaybookView() {
+  const [activeTab, setActiveTab] = useState<'map' | 'player' | 'presentation' | 'video-creator'>('player');
+  const [activeStep, setActiveStep] = useState(0);
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>('connect');
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Screen Recorder & Video Creator State
+  const [isDirectorModeEnabled, setIsDirectorModeEnabled] = useState(true);
+  const [isMicEnabled, setIsMicEnabled] = useState(false);
+  const [recordingState, setRecordingState] = useState<'idle' | 'preparing' | 'recording' | 'stopped'>('idle');
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
+  const [recordingDuration, setRecordingDuration] = useState<number>(0);
+  const [autoAdvanceInterval, setAutoAdvanceInterval] = useState<number>(5);
+  const [isVoiceoverNarratorEnabled, setIsVoiceoverNarratorEnabled] = useState(true);
+
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const speakStep = (stepIndex: number) => {
+    if (!isVoiceoverNarratorEnabled) return;
+    try {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel(); // cancel any active speech
+        const step = steps[stepIndex];
+        const textToSpeak = `${step.title}. ${step.description}`;
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        utterance.rate = 1.05; // natural pacing
+        utterance.volume = 0.9;
+        window.speechSynthesis.speak(utterance);
+      }
+    } catch (e) {
+      console.warn("Speech synthesis failed:", e);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      setRecordingState('preparing');
+      setRecordedBlob(null);
+      if (recordedUrl) {
+        URL.revokeObjectURL(recordedUrl);
+        setRecordedUrl(null);
+      }
+      chunksRef.current = [];
+
+      // 1. Capture screen display with system audio if available
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 }
+        },
+        audio: true
+      });
+
+      let combinedStream = displayStream;
+
+      // 2. Capture microphone overlay if enabled
+      if (isMicEnabled) {
+        try {
+          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          micStreamRef.current = micStream;
+
+          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const dest = audioContext.createMediaStreamDestination();
+
+          if (displayStream.getAudioTracks().length > 0) {
+            const displayAudioSource = audioContext.createMediaStreamSource(new MediaStream([displayStream.getAudioTracks()[0]]));
+            displayAudioSource.connect(dest);
+          }
+
+          const micAudioSource = audioContext.createMediaStreamSource(micStream);
+          micAudioSource.connect(dest);
+
+          const videoTrack = displayStream.getVideoTracks()[0];
+          const mixedAudioTrack = dest.stream.getAudioTracks()[0];
+
+          combinedStream = new MediaStream([videoTrack, mixedAudioTrack]);
+        } catch (micErr) {
+          console.warn("Microphone access declined or failed, falling back to screen capture:", micErr);
+        }
+      }
+
+      streamRef.current = combinedStream;
+
+      // Select mime type
+      let mimeType = 'video/webm;codecs=vp9';
+      if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm;codecs=vp8';
+      if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+      if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/mp4';
+
+      const recorder = new MediaRecorder(combinedStream, { mimeType });
+      recorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || 'video/webm' });
+        setRecordedBlob(blob);
+        const url = URL.createObjectURL(blob);
+        setRecordedUrl(url);
+        setRecordingState('stopped');
+
+        // Stop all tracks
+        if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
+        if (micStreamRef.current) micStreamRef.current.getTracks().forEach(track => track.stop());
+      };
+
+      // Handle user stopping screen share via native browser banner
+      displayStream.getVideoTracks()[0].onended = () => {
+        stopRecording();
+      };
+
+      recorder.start(250); // Slice data every 250ms
+      setRecordingState('recording');
+      setRecordingDuration(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+
+      if (isDirectorModeEnabled) {
+        // Switch view to active player and trigger play
+        setActiveTab('player');
+        setActiveStep(0);
+        setIsPlaying(true);
+        // Start voiceover for the first step
+        setTimeout(() => {
+          speakStep(0);
+        }, 1200);
+      }
+
+    } catch (err) {
+      console.error("Screen recording setup failed:", err);
+      setRecordingState('idle');
+    }
+  };
+
+  const stopRecording = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.stop();
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+    }
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    setIsPlaying(false);
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
+      if (micStreamRef.current) micStreamRef.current.getTracks().forEach(track => track.stop());
+    };
+  }, []);
+
+  // 10s Hyper Hook state
+  const [hookSecond, setHookSecond] = useState<number>(0);
+  const [isHookPlaying, setIsHookPlaying] = useState<boolean>(false);
+  const [hookVibe, setHookVibe] = useState<'minimal' | 'cyber' | 'corporate' | 'epic'>('cyber');
+  const hookTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Gemini Automated Pitch & TTS State
+  const [hookTopic, setHookTopic] = useState<string>("Automated Sales Return Quality Control & Monday.com Sync");
+  const [hookVoice, setHookVoice] = useState<string>("Zephyr");
+  const [customFrames, setCustomFrames] = useState<any[] | null>(null);
+  const [isGeneratingPitch, setIsGeneratingPitch] = useState<boolean>(false);
+  const [isSynthesizing, setIsSynthesizing] = useState<boolean>(false);
+  const [synthesizedAudios, setSynthesizedAudios] = useState<{ [key: number]: string }>({});
+
+  const handleGeneratePitch = async () => {
+    setIsGeneratingPitch(true);
+    setSynthesizedAudios({}); // Clear old voiceovers
+    try {
+      const response = await fetch("/api/gemini/generate-pitch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: hookTopic, vibe: hookVibe }),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to generate pitch storyboard");
+      }
+      const data = await response.json();
+      if (data && data.frames) {
+        setCustomFrames(data.frames);
+        playSynthSound('chime');
+      }
+    } catch (e) {
+      console.error("Failed to generate AI pitch:", e);
+    } finally {
+      setIsGeneratingPitch(false);
+    }
+  };
+
+  const handleSynthesizeAll = async (framesToUse: any[]) => {
+    setIsSynthesizing(true);
+    const newAudios: { [key: number]: string } = {};
+    try {
+      for (let i = 0; i < framesToUse.length; i++) {
+        const frame = framesToUse[i];
+        const response = await fetch("/api/gemini/synthesize-speech", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: frame.voiceover, voice: hookVoice }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.audio) {
+            newAudios[i] = "data:audio/wav;base64," + data.audio;
+          }
+        }
+      }
+      setSynthesizedAudios(newAudios);
+      playSynthSound('chime');
+    } catch (e) {
+      console.error("Failed to synthesize TTS:", e);
+    } finally {
+      setIsSynthesizing(false);
+    }
+  };
+
+  const playVoiceover = (frameIndex: number) => {
+    const audioDataUrl = synthesizedAudios[frameIndex];
+    if (audioDataUrl) {
+      try {
+        const audio = new Audio(audioDataUrl);
+        audio.volume = 0.95;
+        audio.play().catch(err => console.warn("Failed to play synthesized speech:", err));
+      } catch (e) {
+        console.warn("Audio play failed:", e);
+      }
+    }
+  };
+
+  const presentationSlides = [
+    {
+      title: "1. The Enterprise Quality Challenge",
+      subtitle: "Traditional cargo reception is broken by fragmentation",
+      challenge: "Warehouse teams waste hours deciphering unstructured cargo receipts, manually typing legacy product IDs, and dealing with page-overflowing PDF print-outs or unverified inspector edits.",
+      solution: "This system integrates your Monday.com board, Firestore secure logs, and an adaptive PDF layout generator into a unified, secure web app.",
+      kpis: [
+        { label: "Audit execution time", value: "-85%" },
+        { label: "Manual SKU mismatches", value: "0" },
+        { label: "Dispute resolution speed", value: "Immediate" }
+      ]
+    },
+    {
+      title: "2. Dual-Endpoint Monday.com Interconnect",
+      subtitle: "Secure enterprise workspace synchronization",
+      challenge: "Monday.com workspaces require highly safe key transfers. Global and Europe-regulated companies require physical database residency constraints.",
+      solution: "Dual-Region connectivity is built right into the core. Integrates v2024-04 monday.com columns to update passed status, defect ratios, and expiry flags with zero latency.",
+      kpis: [
+        { label: "Supported Regions", value: "Global & EU" },
+        { label: "Data Latency", value: "< 250ms" },
+        { label: "Sync API protocol", value: "GraphQL" }
+      ]
+    },
+    {
+      title: "3. Smart SKU Resolution Database",
+      subtitle: "Dynamic legacy mapping on the fly",
+      challenge: "Vendors label cargo with erratic, hand-written names (like 'APP-RED-M-XL') making inventory database lookups impossible.",
+      solution: "Our embedded resolution engine automatically correlates unstructured cargo text to official EAN barcodes using an optimized dynamic look-up.",
+      kpis: [
+        { label: "Dynamic resolving speed", value: "Instant" },
+        { label: "Database coverage", value: "Barcode-matched" },
+        { label: "Manual inventory audits", value: "Eliminated" }
+      ]
+    },
+    {
+      title: "4. Secured Firestore Audit Ledger",
+      subtitle: "Cryptographic inspection validation with 1522 PIN Vault",
+      challenge: "Unchecked changes or fraudulent report approvals lead to heavy product shrink. Auditable actions must remain completely non-repudiative.",
+      solution: "All finalized reports synchronize directly to a protected Cloud Firestore ledger. Edits, deletions, or sync overrides are barred without entering the secure '1522' PIN protection key.",
+      kpis: [
+        { label: "Audit Trailing Model", value: "Append-only" },
+        { label: "Authentication Gate", value: "1522 Vault" },
+        { label: "Draft recovery", value: "Yes" }
+      ]
+    },
+    {
+      title: "5. PDF Adaptive Calibrator",
+      subtitle: "An elegant solution to physical print constraints",
+      challenge: "Traditional web browsers generate printed pages with erratic page-overflows, overlapping lines, or table clipping which look sloppy to high-end clients.",
+      solution: "We engineered custom spacing, padding, and text-scale slider rules. The inspector directly calibrates target metrics in real-time, enforcing clean borders and zero page-overlaps.",
+      kpis: [
+        { label: "Print formatting fits", value: "Perfect 1-Page" },
+        { label: "Overflow prevention", value: "Automated" },
+        { label: "Styling layout presets", value: "Real-time CSS" }
+      ]
+    }
+  ];
+
+  const generateClientProposal = () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      // Page 1: Elegant cover
+      // Dark header banner
+      doc.setFillColor(20, 20, 20);
+      doc.rect(0, 0, 210, 60, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('Helvetica', 'bold');
+      doc.setFontSize(22);
+      doc.text("ENTERPRISE QC AUDIT SYSTEM", 15, 25);
+      doc.setFont('Helvetica', 'normal');
+      doc.setFontSize(11);
+      doc.text("Project Architecture & Custom Integration Brief", 15, 34);
+      doc.text("Prepared for: Client Presentation", 15, 39);
+      doc.text("Authorized secure ledger protocol: 1522 verification gate", 15, 44);
+
+      // Section: Core Tech Stack
+      doc.setTextColor(20, 20, 20);
+      doc.setFontSize(14);
+      doc.setFont('Helvetica', 'bold');
+      doc.text("1. SYSTEM INTEGRATION SUMMARY", 15, 75);
+      
+      doc.setFont('Helvetica', 'normal');
+      doc.setFontSize(9.5);
+      const textIntro = "This document presents the technical overview of the Quality Control Integration built specifically for Monday.com enterprise workspaces. The system automates barcode resolution and ensures 100% compliance via Firestore audit ledgers.";
+      doc.text(doc.splitTextToSize(textIntro, 180), 15, 82);
+
+      // Tech spec table
+      doc.setFillColor(245, 245, 245);
+      doc.rect(15, 95, 180, 50, 'F');
+      doc.setDrawColor(20, 20, 20);
+      doc.setLineWidth(0.3);
+      doc.rect(15, 95, 180, 50);
+
+      doc.setFont('Helvetica', 'bold');
+      doc.text("INTEGRATION VECTOR", 20, 102);
+      doc.text("SPECIFICATION & PROTOCOL", 95, 102);
+      doc.line(15, 105, 195, 105);
+
+      const tableRows = [
+        ["Monday.com Gateway", "GraphQL API v2024-04 (Global & Europe Regions)"],
+        ["Local Database", "Secure Firebase Firestore (1522 PIN Vault verified)"],
+        ["Product Resolution", "Unstructured Label to Standard EAN (skus.ts database)"],
+        ["Document Output", "jsPDF High-Fidelity Custom Spacing Engine (no overlapping)"],
+        ["Deployment Architecture", "Dual-support local Express.js / Node / Vercel Edge Server"]
+      ];
+
+      doc.setFont('Helvetica', 'normal');
+      let tableY = 112;
+      tableRows.forEach(row => {
+        doc.setFont('Helvetica', 'bold');
+        doc.text(row[0], 20, tableY);
+        doc.setFont('Helvetica', 'normal');
+        doc.text(row[1], 95, tableY);
+        tableY += 7;
+      });
+
+      // Section: Measurable Business Impact (ROI)
+      doc.setFont('Helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.text("2. TARGET BUSINESS IMPACT & PERFORMANCE KPI METRICS", 15, 160);
+
+      const kpis = [
+        ["Time Savings", "Reduction in cargo audit times by 85% through offline mapping caches."],
+        ["Resolution Speed", "Instant SKU barcode lookup reduces cargo mapping errors to exactly 0."],
+        ["Data Residency", "Full GDPR and US standard data isolation compliance via dual global/EU nodes."],
+        ["Print Optimization", "Dynamic margins avoid overlap on multi-page reports, saving 30% on print material."]
+      ];
+
+      let kpiY = 168;
+      kpis.forEach(kpi => {
+        doc.setFont('Helvetica', 'bold');
+        doc.text(kpi[0] + ": ", 15, kpiY);
+        doc.setFont('Helvetica', 'normal');
+        const dText = doc.splitTextToSize(kpi[1], 150);
+        doc.text(dText, 45, kpiY);
+        kpiY += 10;
+      });
+
+      // Bottom footer banner
+      doc.setFillColor(240, 240, 240);
+      doc.rect(15, 245, 180, 20, 'F');
+      doc.setFont('Helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(50, 50, 50);
+      doc.text("CLASSIFICATION: COMMERCIAL IN CONFIDENCE - PARTNER BRIEF", 20, 254);
+      doc.setFont('Helvetica', 'normal');
+      doc.text("Validated system signature: 1522 cryptographic access protocols enabled.", 20, 259);
+
+      // Save PDF Project Brief
+      doc.save("QualityControl_System_Integration_Proposal.pdf");
+    } catch (e) {
+      console.error("Failed to generate client proposal:", e);
+    }
+  };
+
+  const steps = [
+    {
+      id: 'connect',
+      title: 'Monday.com Integration & Auth',
+      description: 'Establish a secure gateway to Global or European Monday.com workspace boards. Requires a valid personal API token or password access with encrypted token sync.',
+      inputs: ['API Token', 'Board Region Selection', '1522 Administrator PIN'],
+      outputs: ['Workspace Board Index', 'Synced Metadata Schema', 'Secure Session Session Token'],
+      tech: 'Monday GraphQL API (v2024-04), Symmetric Passwords, Dual Endpoint Selectors',
+      graphicType: 'auth'
+    },
+    {
+      id: 'fetch',
+      title: 'GRN Cargo Loading & SKU Mapping',
+      description: 'Fetch goods-receipts in real-time. Automatically parses unstructured item labels and maps legacy item SKUs to standard retail barcodes using advanced client mappings.',
+      inputs: ['Pending Cargo Logs', 'Legacy SKU Identifiers'],
+      outputs: ['Clean Barcode Identifiers', 'Formatted Item Specifications', 'Audit-ready Tables'],
+      tech: 'Fast Client-Side Mapper (skus.ts), Parallel Fetch API, Monday Native Column Index',
+      graphicType: 'sku'
+    },
+    {
+      id: 'audit',
+      title: 'Precision QA assessment form',
+      description: 'Perform condition grading on batch quantities. Classify goods into Received, Not-Received, Expired, Repairable, or Damaged, and select strategic USE (e.g., FRESH vs RTV).',
+      inputs: ['Batch Quantity Count', 'Physical Condition Grading', 'Batch Code', 'MFG & EXP Alerts'],
+      outputs: ['Damage Ratio Percentages', 'Expiring Alerts', 'Valid Disposition States'],
+      tech: 'React State Managers, Auto-Sum Formula Checkers, Dynamic alert calculations',
+      graphicType: 'audit-form'
+    },
+    {
+      id: 'sync',
+      title: 'Secure Firestore Database Ledger Sync',
+      description: 'Publish completed reports to the centralized Firebase Firestore database. The transfer is locked behind strict backend and firestore.rules using the 1522 verification mechanism.',
+      inputs: ['Completed QC Form', 'Inspector Signature Draft'],
+      outputs: ['Verifiable Database Record', 'Persistent History Log Entry', 'Firestore Document ID'],
+      tech: 'Firebase Firestore SDK, Transaction atomicity, Off-line draft queues',
+      graphicType: 'draft-sync'
+    },
+    {
+      id: 'resizing',
+      title: 'Dynamic PDF Layout Calibration',
+      description: 'Modify physical layout parameters (margins, paddings, table height, text sizes) using continuous sliders to guarantee a perfectly styled, single-page print fit without text overflows.',
+      inputs: ['Page Margins (mm)', 'Table Row Spacing (px)', 'Typography Scales'],
+      outputs: ['Re-aligned View Canvas', 'Optimized Print Bounds', 'CSS Custom Variables'],
+      tech: 'Tailwind CSS Variables, Continuous Slider Hooks, Dynamic Style Remaps',
+      graphicType: 'pdf-settings'
+    },
+    {
+      id: 'print-share',
+      title: 'High-Fidelity PDF Print & Share',
+      description: 'Generate high-contrast vector PDFs. Print using hidden iframe sandbox bridges for safe desktop flows, or dispatch directly to mobile share sheets via navigator sharing.',
+      inputs: ['Custom PDF Spacing Profile', 'Calibrated Grid State'],
+      outputs: ['Vector PDF Blob URL', 'Browser Print Dialogue Trigger', 'Native OS Share Modal'],
+      tech: 'jsPDF Writer, HTML5 Share API, Median / GoNative Webview Bridge, Dynamic blobs',
+      graphicType: 'pdf-output'
+    },
+    {
+      id: 'analytics',
+      title: 'Recursive Trends & Return Heatmaps',
+      description: 'Review systemic failure logs. Analytics tracks returning SKU loops recursively, shows worse-performing suppliers, and tracks high-priority expiration risks.',
+      inputs: ['Firestore Historical Log Ledger', 'Supplier Defect Metrics'],
+      outputs: ['Return Loop Network Graph', 'Supplier Pareto Charts', 'Risk Trend-Lines'],
+      tech: 'Recharts visualizers, Trend-fitting, Expiry alerts dashboard',
+      graphicType: 'analytics-charts'
+    }
+  ];
+
+  // Auto-play timer for play button inside Interactive Video Simulator
+  useEffect(() => {
+    if (isPlaying) {
+      timerRef.current = setInterval(() => {
+        setActiveStep((prev) => {
+          const next = (prev + 1) % steps.length;
+          
+          // If we completed a full loop during recording and director mode is on, automatically stop!
+          if (next === 0 && recordingState === 'recording' && isDirectorModeEnabled) {
+            stopRecording();
+            return 0;
+          }
+          
+          // Trigger automated vocal reader if enabled
+          speakStep(next);
+          return next;
+        });
+      }, autoAdvanceInterval * 1000);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isPlaying, steps.length, autoAdvanceInterval, recordingState, isDirectorModeEnabled, isVoiceoverNarratorEnabled]);
+
+  // Web Audio Synth for 10-Second pitch sound effects
+  const playSynthSound = (type: 'swoosh' | 'scan' | 'lock' | 'chime') => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      const now = ctx.currentTime;
+      
+      if (type === 'swoosh') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(120, now);
+        osc.frequency.exponentialRampToValueAtTime(1400, now + 0.45);
+        gain.gain.setValueAtTime(0.01, now);
+        gain.gain.linearRampToValueAtTime(0.25, now + 0.1);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.45);
+        osc.start(now);
+        osc.stop(now + 0.45);
+      } else if (type === 'scan') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(1500, now);
+        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.setValueAtTime(0.01, now + 0.08);
+        
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+        osc2.type = 'triangle';
+        osc2.frequency.setValueAtTime(2000, now + 0.1);
+        gain2.gain.setValueAtTime(0.12, now + 0.1);
+        gain2.gain.setValueAtTime(0.01, now + 0.18);
+        
+        osc.start(now);
+        osc.stop(now + 0.09);
+        osc2.start(now + 0.1);
+        osc2.stop(now + 0.19);
+      } else if (type === 'lock') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.25);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+        osc.start(now);
+        osc.stop(now + 0.26);
+      } else if (type === 'chime') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, now);
+        osc.frequency.exponentialRampToValueAtTime(1320, now + 0.35);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.7);
+        
+        const subOsc = ctx.createOscillator();
+        const subGain = ctx.createGain();
+        subOsc.connect(subGain);
+        subGain.connect(ctx.destination);
+        subOsc.type = 'sine';
+        subOsc.frequency.setValueAtTime(440, now);
+        subGain.gain.setValueAtTime(0.12, now);
+        subGain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        
+        osc.start(now);
+        osc.stop(now + 0.72);
+        subOsc.start(now);
+        subOsc.stop(now + 0.52);
+      }
+    } catch (e) {
+      console.warn("AudioContext init error: ", e);
+    }
+  };
+
+  const defaultFrames = [
+    {
+      range: "0.0s - 2.5s",
+      title: "1. The Disruption Hook",
+      soundName: "⚡ Neon Swoosh SFX",
+      soundType: "swoosh" as 'swoosh' | 'scan' | 'lock' | 'chime',
+      activeRange: [0, 1, 2],
+      voiceover: "Cargo audits are chaotic. Legacy code typos break your inventory chains.",
+      screenshot: "1. Manual Warehouse Intake Block (Error Typos)",
+      instructions: "Open the builder, click 'Log manual cargo', and type a chaotic vendor code like 'APP-RED-M-XL' to capture the visual inventory frustration.",
+      videoPrompt: "A macro close-up of a glowing digital keyboard typing error codes, neon crimson lighting, rain-streaked terminal reflections, high fidelity cybernetic aesthetic, 8k."
+    },
+    {
+      range: "2.5s - 5.0s",
+      title: "2. Automatic SKU Resolver",
+      soundName: "🔍 Workspace Scan SFX",
+      soundType: "scan" as 'swoosh' | 'scan' | 'lock' | 'chime',
+      activeRange: [3, 4, 5],
+      voiceover: "But this system automatically maps unstructured cargo text to standardized barcodes—syncing to Monday.com instantly!",
+      screenshot: "2. Active Monday.com Table / SKU Pairings",
+      instructions: "Capture the live resolution grid as it matches raw text with the barcode, highlighting the custom Monday.com sync status.",
+      videoPrompt: "Neon green grid interface mapping digital barcodes on a floating glass dashboard, holographic numbers syncing, cyberpunk."
+    },
+    {
+      range: "5.0s - 7.5s",
+      title: "3. 1522 Secure Verification Gate",
+      soundName: "🔒 Cryptographic Lock SFX",
+      soundType: "lock" as 'swoosh' | 'scan' | 'lock' | 'chime',
+      activeRange: [6, 7],
+      voiceover: "Locked tight. Finalized records sync to a safe Firestore ledger—sealed with a 1522 PIN gate.",
+      screenshot: "3. 1522 Password Success Light",
+      instructions: "Enter '1522' into the audit sync window and capture the highlighted green 'Verified Audit' ledger badge.",
+      videoPrompt: "Futuristic hand typing the security key code 1-5-2-2 on an emerald holographic keypad, digital fingerprint scan."
+    },
+    {
+      range: "7.5s - 10.0s",
+      title: "4. Adaptive PDF Page Outro",
+      soundName: "🔔 Perfect Chime SFX",
+      soundType: "chime" as 'swoosh' | 'scan' | 'lock' | 'chime',
+      activeRange: [8, 9, 10],
+      voiceover: "Calibrated for flawless print layouts. Beautiful, secure audits—every single time.",
+      screenshot: "4. Adaptive Spacing PDF Preview",
+      instructions: "Capture the PDF layout calibration slider section as it auto-fits the invoice on a single clean page without overlapping.",
+      videoPrompt: "A perfect digital ledger document sliding down a neon terminal with green success checkmarks."
+    }
+  ];
+
+  const activeFrames = useMemo(() => {
+    if (!customFrames) return defaultFrames;
+    return customFrames.map((f, i) => {
+      let soundName = "⚡ Neon Swoosh SFX";
+      let activeRange = [0, 1, 2];
+      if (i === 1) {
+        soundName = "🔍 Workspace Scan SFX";
+        activeRange = [3, 4, 5];
+      } else if (i === 2) {
+        soundName = "🔒 Cryptographic Lock SFX";
+        activeRange = [6, 7];
+      } else if (i === 3) {
+        soundName = "🔔 Perfect Chime SFX";
+        activeRange = [8, 9, 10];
+      }
+      return {
+        ...f,
+        soundName,
+        activeRange,
+      };
+    });
+  }, [customFrames]);
+
+  // 10s Playback Effect
+  useEffect(() => {
+    if (isHookPlaying) {
+      setHookSecond(0);
+      hookTimerRef.current = setInterval(() => {
+        setHookSecond((prev) => {
+          const next = prev + 1;
+          if (next >= 10) {
+            setIsHookPlaying(false);
+            if (hookTimerRef.current) clearInterval(hookTimerRef.current);
+            return 10;
+          }
+          // Play synth sounds and voiceover audios at exact second marks!
+          if (next === 3) {
+            playSynthSound(activeFrames[1].soundType);
+            playVoiceover(1);
+          } else if (next === 6) {
+            playSynthSound(activeFrames[2].soundType);
+            playVoiceover(2);
+          } else if (next === 8) {
+            playSynthSound(activeFrames[3].soundType);
+            playVoiceover(3);
+          }
+          return next;
+        });
+      }, 1000);
+      // Play initial sound and voiceover
+      playSynthSound(activeFrames[0].soundType);
+      playVoiceover(0);
+    } else {
+      if (hookTimerRef.current) {
+        clearInterval(hookTimerRef.current);
+      }
+    }
+    return () => {
+      if (hookTimerRef.current) clearInterval(hookTimerRef.current);
+    };
+  }, [isHookPlaying, activeFrames]);
+
+  return (
+    <div className="flex-1 bg-[#141414]/2 flex flex-col h-full overflow-hidden p-4 lg:p-8">
+      {/* Title block */}
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between border-b border-[#141414]/15 pb-6 mb-6">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="px-2 py-0.5 bg-[#141414] text-white text-[8px] font-black uppercase tracking-widest rounded-sm">DEMO CENTER</span>
+            <span className="text-[9px] font-mono text-[#141414]/40 uppercase tracking-widest">Interactive Walkthrough System</span>
+          </div>
+          <h1 className="font-serif italic text-2xl lg:text-3xl text-[#141414] tracking-tight">System Flow Playbook</h1>
+        </div>
+
+        {/* View mode buttons */}
+        <div className="flex bg-white/60 p-1 border border-[#141414]/10 rounded shadow-sm mt-4 md:mt-0 gap-1 overflow-x-auto">
+          <button
+            onClick={() => { setActiveTab('player'); setIsPlaying(false); setIsHookPlaying(false); }}
+            className={`px-3 py-1.5 text-[10px] uppercase font-black tracking-wider transition-all rounded whitespace-nowrap ${
+              activeTab === 'player' ? 'bg-[#141414] text-white shadow' : 'text-[#141414]/60 hover:text-[#141414]'
+            }`}
+          >
+            Video Live Demo
+          </button>
+          <button
+            onClick={() => { setActiveTab('map'); setIsPlaying(false); setIsHookPlaying(false); }}
+            className={`px-3 py-1.5 text-[10px] uppercase font-black tracking-wider transition-all rounded whitespace-nowrap ${
+              activeTab === 'map' ? 'bg-[#141414] text-white shadow' : 'text-[#141414]/60 hover:text-[#141414]'
+            }`}
+          >
+            Architecture Flow
+          </button>
+          <button
+            type="button"
+            onClick={() => { setActiveTab('presentation'); setIsPlaying(false); setIsHookPlaying(false); }}
+            className={`px-3 py-1.5 text-[10px] uppercase font-black tracking-wider transition-all rounded whitespace-nowrap ${
+              activeTab === 'presentation' ? 'bg-[#141414] text-white shadow' : 'text-[#141414]/60 hover:text-[#141414]'
+            }`}
+          >
+            Client Pitch & Deck
+          </button>
+          <button
+            type="button"
+            onClick={() => { setActiveTab('video-creator'); setIsPlaying(false); setIsHookPlaying(false); }}
+            className={`px-3 py-1.5 text-[10px] uppercase font-black tracking-wider transition-all rounded whitespace-nowrap ${
+              activeTab === 'video-creator' ? 'bg-[#141414] text-white shadow' : 'text-[#141414]/60 hover:text-[#141414]'
+            }`}
+          >
+            🎬 Project Video Creator
+          </button>
+        </div>
+      </div>
+
+      {activeTab === 'player' ? (
+        <div className="flex-grow flex flex-col lg:flex-row grid-cols-1 lg:grid-cols-12 gap-6 min-h-0 overflow-y-auto lg:overflow-hidden pb-4">
+          {/* Mock Video Screen Area (Left/Top) */}
+          <div className="lg:col-span-8 flex flex-col bg-white border-2 border-[#141414] shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] relative overflow-hidden min-h-[350px] lg:h-full lg:w-2/3">
+            {/* Camera Frame details */}
+            <div className="flex items-center justify-between px-4 py-2 border-b border-[#141414] bg-neutral-100 text-[10px] font-mono text-[#141414]/60">
+              <span className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-red-600 rounded-full animate-pulse" /> LIVE WORKFLOW SIMULATOR
+              </span>
+              <span className="uppercase tracking-widest">Frame {activeStep + 1} of {steps.length} — 1080P FHD</span>
+            </div>
+
+            {/* Simulation Graphic Rendering */}
+            <div className="flex-1 flex flex-col items-center justify-center p-6 lg:p-12 bg-neutral-50 relative">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={steps[activeStep].id}
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                  transition={{ duration: 0.3 }}
+                  className="w-full h-full flex flex-col items-center justify-center max-w-lg"
+                >
+                  {/* Auth Panel Mockup */}
+                  {steps[activeStep].graphicType === 'auth' && (
+                    <div className="w-full bg-white border-2 border-[#141414] p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] text-left font-mono">
+                      <div className="flex items-center justify-between mb-4 border-b border-[#141414] pb-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-green-600">● SECURE SYNC ENABLED</span>
+                        <span className="text-[8px] opacity-40">ADMIN MODE</span>
+                      </div>
+                      <div className="space-y-3">
+                        <label className="block text-[8px] uppercase tracking-wider opacity-60">Monday.com Personal Token</label>
+                        <div className="p-2 border border-[#141414]/20 bg-neutral-50 text-[10px] overflow-hidden whitespace-nowrap text-ellipsis">
+                          eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MTUyMi...
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[8px] uppercase tracking-wider opacity-60">Endpoint Region</label>
+                            <div className="p-2 border border-[#141414]/20 bg-neutral-50 text-[10px]">
+                              Global (api.monday.com)
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-[8px] uppercase tracking-wider opacity-60">Verification Credentials</label>
+                            <div className="p-2 border border-[#141414]/20 bg-[#141414] text-white text-[10px] text-center font-bold">
+                              PASSCODE 1522 MATCHED
+                            </div>
+                          </div>
+                        </div>
+                        <div className="p-2 bg-green-50 border border-green-200 text-green-800 text-[10px] rounded space-y-1">
+                          <p className="font-bold">✓ Workspace connection successful!</p>
+                          <p className="text-[8px] opacity-8 outsourcing-tight">Synchronized 18 pending shipment boards automatically.</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SKU Mapper Mockup */}
+                  {steps[activeStep].graphicType === 'sku' && (
+                    <div className="w-full bg-white border-2 border-[#141414] p-4 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] text-left font-mono text-[9px]">
+                      <div className="flex justify-between border-b border-[#141414] pb-2 mb-3">
+                        <span className="font-bold uppercase tracking-wider">SKU Resolution Engine</span>
+                        <span className="bg-blue-100 text-blue-800 px-1.5 rounded">6 SKU mapped</span>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="border border-[#141414]/15 rounded divide-y divide-[#141414]/10 bg-neutral-50">
+                          <div className="p-2 flex justify-between">
+                            <span className="opacity-55">Unstructured Item Label:</span>
+                            <span className="font-bold text-red-600">APP-RED-M-XL (Monday.com Line)</span>
+                          </div>
+                          <div className="p-2 flex justify-between bg-emerald-50/50">
+                            <span className="text-emerald-700 font-bold">✓ Mapped Standard Barcode:</span>
+                            <span className="font-bold text-emerald-800">8901058002341 (skus.ts database)</span>
+                          </div>
+                        </div>
+                        <div className="border border-[#141414]/15 rounded divide-y divide-[#141414]/10 bg-neutral-50 text-[8px]">
+                          <div className="p-1.5 flex justify-between">
+                            <span className="opacity-55">CARG-ORG-S-01</span>
+                            <span>➜ 8901235610091 (Organic Oranges Bag S)</span>
+                          </div>
+                          <div className="p-1.5 flex justify-between">
+                            <span className="opacity-55">MILK-WHOLE-1L</span>
+                            <span>➜ 8901050011500 (Pure Whole Milk 1 Litre)</span>
+                          </div>
+                        </div>
+                        <div className="text-[8px] leading-relaxed text-blue-800/80 italic">
+                          ℹ️ automatically matches Monday cargo titles to dynamic retail items, preventing manual indexing errors.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Audit Form Mockup */}
+                  {steps[activeStep].graphicType === 'audit-form' && (
+                    <div className="w-full bg-white border-2 border-[#141414] p-4 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] text-left text-[9px] font-mono">
+                      <div className="flex justify-between border-b pb-1.5 mb-3">
+                        <span className="font-bold uppercase text-amber-600">Active Cargo Inspection Block</span>
+                        <span>GRN #03144</span>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2 text-[8px]">
+                          <div className="p-1.5 border border-[#141414]/10 rounded bg-neutral-50">
+                            <span className="block opacity-60">CARGO QUANTITY (PASSED)</span>
+                            <strong className="text-[12px] text-emerald-600">82 Units</strong>
+                          </div>
+                          <div className="p-1.5 border border-[#141414]/10 rounded bg-neutral-50">
+                            <span className="block opacity-60">DAMAGED (NON-REPAIRABLE)</span>
+                            <strong className="text-[12px] text-red-600">18 Units</strong>
+                          </div>
+                        </div>
+                        <div className="p-2 border border-dashed border-[#141414]/30 rounded space-y-1">
+                          <div className="flex justify-between">
+                            <span>RECURSIVE RETURN RATIO:</span>
+                            <span className="font-bold text-red-600">18.00% (Supplier Warning)</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>RECOMMENDED ACTION (USE):</span>
+                            <span className="font-bold bg-rose-100 text-rose-800 px-1 rounded uppercase tracking-wider">RTV (Return to Vendor)</span>
+                          </div>
+                        </div>
+                        <div className="p-1.5 bg-[#141414] text-white uppercase text-[8px] tracking-wider text-center font-bold">
+                          Verify Grade & Update Monday columns
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Firestore Sync Mockup */}
+                  {steps[activeStep].graphicType === 'draft-sync' && (
+                    <div className="w-full bg-white border-2 border-[#141414] p-5 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] text-left font-mono">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Database className="text-amber-500 animate-pulse" size={14} />
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Cloud Firestore Synchronization</span>
+                      </div>
+                      <div className="space-y-3 text-[9px]">
+                        <div className="bg-neutral-50 p-2.5 border rounded border-neutral-200 font-mono space-y-1">
+                          <div className="flex justify-between text-blue-600">
+                            <span>Publish State:</span>
+                            <span className="font-bold">ACTIVE TRANSACT</span>
+                          </div>
+                          <div className="flex justify-between text-[#141414]/60">
+                            <span>Collection Path:</span>
+                            <span>/qc_reports/qc_03144_918</span>
+                          </div>
+                          <div className="flex justify-between text-[#141414]/60">
+                            <span>Encrypted Lock verification:</span>
+                            <span>PIN Verified (1522)</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2.5 bg-emerald-50 text-emerald-800 p-2 rounded border border-emerald-200">
+                          <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                          <div>
+                            <p className="font-bold">Record synchronized to historical archive!</p>
+                            <p className="text-[8px] opacity-80">Sync health score: 100% — audit track log established.</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* PDF settings Mockup */}
+                  {steps[activeStep].graphicType === 'pdf-settings' && (
+                    <div className="w-full bg-white border-2 border-[#141414] p-5 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] text-left font-mono">
+                      <div className="flex justify-between border-b border-[#141414] pb-2 mb-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">PDF Formatting Calibration Panel</span>
+                        <span className="text-[8px] opacity-40">VITE PREVIEW RESOLUTION</span>
+                      </div>
+                      <div className="space-y-3 text-[9px]">
+                        {/* margin simulation */}
+                        <div className="space-y-1">
+                          <div className="flex justify-between">
+                            <span>Side Margins</span>
+                            <span className="text-blue-600 font-bold">2 mm</span>
+                          </div>
+                          <div className="w-full bg-neutral-200 h-1 rounded overflow-hidden">
+                            <div className="bg-[#141414] h-full" style={{ width: '25%' }} />
+                          </div>
+                        </div>
+                        {/* padding simulation */}
+                        <div className="space-y-1">
+                          <div className="flex justify-between">
+                            <span>Table Column Padding</span>
+                            <span className="text-blue-600 font-bold">12 px</span>
+                          </div>
+                          <div className="w-full bg-neutral-200 h-1 rounded overflow-hidden">
+                            <div className="bg-[#141414] h-full" style={{ width: '60%' }} />
+                          </div>
+                        </div>
+                        {/* size simulation */}
+                        <div className="space-y-1">
+                          <div className="flex justify-between">
+                            <span>Description Font Size</span>
+                            <span className="text-blue-600 font-bold">10 px (Ultra-compact auto-wrap)</span>
+                          </div>
+                          <div className="w-full bg-neutral-200 h-1 rounded overflow-hidden">
+                            <div className="bg-[#141414] h-full" style={{ width: '40%' }} />
+                          </div>
+                        </div>
+                        <p className="text-[8px] text-amber-600 italic">
+                          ⚠️ Slides instantly adjust CSS variables inside the hidden layout DOM before printing to guarantee no overlapping lines or unannounced multi-pages.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* PDF output Mockup */}
+                  {steps[activeStep].graphicType === 'pdf-output' && (
+                    <div className="w-full bg-white border-2 border-[#141414] p-4 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] text-left text-[9px] font-sans relative">
+                      <div className="absolute top-2 right-2 border-2 border-[#141414] text-[#141414] font-black uppercase tracking-widest text-[8px] px-1.5 py-0.5 rotate-12 scale-90 select-none bg-yellow-100">
+                        APPROVED QC PASS
+                      </div>
+                      <div className="border border-[#141414] p-3 space-y-2">
+                        <div className="border-b border-[#141414]/20 pb-2 text-[10px] font-serif italic font-bold">
+                          QUALITY INSPECTION REPORT
+                        </div>
+                        <div className="grid grid-cols-2 text-[7px] text-[#141414]/60 uppercase font-mono">
+                          <div>
+                            <p>Report Ref: QC-2026-03144</p>
+                            <p>Cargo Origin: Warehouse A</p>
+                          </div>
+                          <div>
+                            <p>Supervisor ID: Inspect #03</p>
+                            <p>Date: June 13, 2026</p>
+                          </div>
+                        </div>
+                        <table className="w-full border-collapse border border-[#141414] text-[8px]">
+                          <thead>
+                            <tr className="bg-neutral-100 font-bold">
+                              <th className="border border-[#141414] p-1">SKU Description</th>
+                              <th className="border border-[#141414] p-1">Inspected</th>
+                              <th className="border border-[#141414] p-1">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td className="border border-[#141414] p-1 font-mono">8901058002341 - Fresh Red Apple</td>
+                              <td className="border border-[#141414] p-1 text-center">100</td>
+                              <td className="border border-[#141414] p-1 text-center font-bold text-green-600">PASSED</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        <div className="flex justify-between items-center text-[7px] font-mono pt-3">
+                          <span>Report Generated on Cloud Server</span>
+                          <span className="underline select-none cursor-pointer">Print PDF / Share</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Analytics Mockup */}
+                  {steps[activeStep].graphicType === 'analytics-charts' && (
+                    <div className="w-full bg-white border-2 border-[#141414] p-4 shadow-[6px_6px_0px_0px_rgba(0,0,0,0.1)] text-left font-mono text-[9px]">
+                      <div className="flex justify-between border-b border-[#141414] pb-1.5 mb-3">
+                        <span className="font-bold text-rose-600 uppercase">Worst supplier return loop mapping</span>
+                        <span className="text-[8px] opacity-45">RECURSIVE ANALYTICS</span>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between text-[8px] opacity-75">
+                            <span>Apple Farms Global (15 shipments)</span>
+                            <span className="font-bold text-red-600">32% defective rate</span>
+                          </div>
+                          <div className="h-2 bg-neutral-100 border border-[#141414]/10 rounded-sm overflow-hidden flex">
+                            <div className="bg-red-500 h-full" style={{ width: '32%' }} />
+                            <div className="bg-emerald-500 h-full" style={{ width: '68%' }} />
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 overflow-hidden">
+                          <div className="flex justify-between text-[8px] opacity-75">
+                            <span>Prime Meats Ltd (24 shipments)</span>
+                            <span className="font-bold text-amber-600">14% defective rate</span>
+                          </div>
+                          <div className="h-2 bg-neutral-100 border border-[#141414]/10 rounded-sm overflow-hidden flex">
+                            <div className="bg-amber-500 h-full" style={{ width: '14%' }} />
+                            <div className="bg-emerald-500 h-full" style={{ width: '86%' }} />
+                          </div>
+                        </div>
+                        <div className="p-2 border border-blue-200 bg-blue-50/50 rounded text-[8px] leading-relaxed text-blue-900">
+                          <strong>💡 Smart Insight Recommendation:</strong> Red Apples from Apple Farms supplier returned recursively high. Recommend switching vendor or instituting a zero-exception inspection block during incoming cargo check.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
+              </AnimatePresence>
+
+              {/* Dynamic instruction text inside graphic screen */}
+              <div className="absolute bottom-4 left-4 right-4 text-center">
+                <span className="px-3 py-1 bg-white/90 backdrop-blur-sm border border-[#141414]/15 rounded-full text-[9px] font-mono text-[#141414]/60 inline-flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Currently demonstrating step: <strong className="text-[#141414]">{steps[activeStep].title}</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Video progress controls */}
+            <div className="border-t border-[#141414] bg-white p-3 flex flex-col md:flex-row items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPlaying(!isPlaying)}
+                  className="p-2.5 bg-[#141414] text-white hover:bg-neutral-800 transition-colors rounded shadow-sm focus:outline-none flex items-center justify-center"
+                  title={isPlaying ? 'Pause Simulation' : 'Start Simulation Walkthrough'}
+                >
+                  {isPlaying ? (
+                    <span className="text-[9px] font-black uppercase tracking-wider px-1">❙❙ PAUSE</span>
+                  ) : (
+                    <div className="flex items-center gap-1.5 px-1 text-[9px] font-black uppercase tracking-wider">
+                      <Play size={10} fill="currentColor" /> PLAY DEMO WORKFLOW
+                    </div>
+                  )}
+                </button>
+                <div className="hidden md:block h-6 w-px bg-neutral-200" />
+                <span className="text-[10px] font-mono text-[#141414]/50 hidden md:block">
+                  {isPlaying ? '▶ Video walk is actively playing (5s interval)' : 'Pause. Click play to start tour narration.'}
+                </span>
+              </div>
+
+              {/* Progress timeline buttons */}
+              <div className="flex flex-wrap items-center gap-1.5 justify-center">
+                {steps.map((s, idx) => (
+                  <button
+                    key={s.id}
+                    title={s.title}
+                    onClick={() => { setActiveStep(idx); setIsPlaying(false); }}
+                    className={`w-5 h-5 rounded-full text-[9px] font-black flex items-center justify-center transition-all border ${
+                      activeStep === idx 
+                        ? 'bg-[#141414] text-white border-[#141414]' 
+                        : 'bg-neutral-50 text-[#141414]/60 hover:bg-neutral-200 border-neutral-300'
+                    }`}
+                  >
+                    {idx + 1}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Description & Technical Breakdown Card (Right/Bottom) */}
+          <div className="lg:col-span-4 flex flex-col justify-between bg-white border-2 border-[#141414] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] overflow-y-auto lg:w-1/3 h-full">
+            <div className="space-y-6">
+              <div className="border-b border-[#141414]/10 pb-4">
+                <span className="text-[8px] font-mono text-red-600 font-extrabold uppercase tracking-widest">STEP {activeStep + 1} OF 7 DETAILS</span>
+                <h2 className="font-serif italic text-xl text-[#141414] mt-1 leading-tight">{steps[activeStep].title}</h2>
+              </div>
+
+              {/* Paragraph detail */}
+              <div className="space-y-2">
+                <span className="text-[9px] font-black uppercase tracking-widest opacity-40 block">Operational Scope:</span>
+                <p className="text-[11px] lg:text-xs text-[#141414]/80 leading-relaxed font-sans">{steps[activeStep].description}</p>
+              </div>
+
+              {/* Raw components inputs outputs */}
+              <div className="space-y-4 pt-2">
+                <div className="p-3 bg-neutral-50 border border-neutral-200 rounded grid grid-cols-2 gap-4 text-[9px]">
+                  <div className="space-y-1">
+                    <span className="font-extrabold uppercase tracking-wider text-green-700 block">Inputs / Variables:</span>
+                    <ul className="list-disc pl-3.5 space-y-1 text-[#141414]/80">
+                      {steps[activeStep].inputs.map((inp, i) => (
+                        <li key={i}>{inp}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="font-extrabold uppercase tracking-wider text-blue-700 block">Outputs / Artifacts:</span>
+                    <ul className="list-disc pl-3.5 space-y-1 text-[#141414]/80">
+                      {steps[activeStep].outputs.map((out, i) => (
+                        <li key={i}>{out}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-[#141414]/5 border border-[#141414]/10 rounded font-mono text-[9px] space-y-1">
+                  <span className="font-extrabold uppercase tracking-wider text-[#141414]/60 block">Underlying Tech & Drivers:</span>
+                  <p className="text-[#141414]/80 leading-relaxed">{steps[activeStep].tech}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Step navigation utilities */}
+            <div className="pt-6 border-t border-[#141414]/10 mt-6 flex justify-between">
+              <button
+                type="button"
+                onClick={() => { setActiveStep((prev) => (prev - 1 + steps.length) % steps.length); setIsPlaying(false); }}
+                className="px-3 py-1.5 border border-[#141414]/15 bg-neutral-50 text-[10px] uppercase font-black text-[#141414]/70 hover:bg-[#141414] hover:text-white transition-all rounded shadow-sm"
+              >
+                ← Back
+              </button>
+              <button
+                type="button"
+                onClick={() => { setActiveStep((prev) => (prev + 1) % steps.length); setIsPlaying(false); }}
+                className="px-3 py-1.5 bg-[#141414] text-white text-[10px] uppercase font-black hover:bg-neutral-800 transition-all rounded shadow-sm"
+              >
+                Forward →
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : activeTab === 'map' ? (
+        /* Visual Architecture Map Tab View */
+        <div className="flex-grow flex flex-col min-h-0 overflow-y-auto">
+          <div className="bg-white border-2 border-[#141414] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] mb-6 text-left">
+            <h2 className="font-serif italic text-lg mb-2">Interactive Architecture Flow</h2>
+            <p className="text-[11px] lg:text-xs text-[#141414]/60 leading-relaxed font-sans max-w-3xl">
+              This node-flow maps the complete circular loop of the Quality Control Audit workspace. 
+              Click on different system blocks to examine specifications, credentials access rules, and file-output modules.
+            </p>
+          </div>
+
+          {/* Interactive Node Flow Chart */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            {steps.slice(0, 4).map((node, index) => (
+              <button
+                key={node.id}
+                onClick={() => setSelectedNodeId(node.id)}
+                className={`text-left p-5 border-2 transition-all relative rounded ${
+                  selectedNodeId === node.id 
+                    ? 'border-[#141414] bg-white ring-2 ring-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]' 
+                    : 'border-[#141414]/15 bg-white/70 hover:border-[#141414]/40'
+                }`}
+              >
+                <span className="absolute top-3 right-3 w-5 h-5 rounded-full bg-neutral-100 text-[#141414] text-[9px] font-black flex items-center justify-center border border-[#141414]/20">
+                  {index + 1}
+                </span>
+                <span className="text-[8px] font-mono text-red-600 font-extrabold uppercase block tracking-wider mb-2">Workspace Block</span>
+                <h3 className="font-serif italic text-sm text-[#141414] mb-2">{node.title}</h3>
+                <p className="text-[10px] text-[#141414]/50 line-clamp-2 tracking-tight leading-normal">{node.description}</p>
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            {steps.slice(4).map((node, index) => (
+              <button
+                key={node.id}
+                onClick={() => setSelectedNodeId(node.id)}
+                className={`text-left p-5 border-2 transition-all relative rounded ${
+                  selectedNodeId === node.id 
+                    ? 'border-[#141414] bg-white ring-2 ring-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]' 
+                    : 'border-[#141414]/15 bg-white/70 hover:border-[#141414]/40'
+                }`}
+              >
+                <span className="absolute top-3 right-3 w-5 h-5 rounded-full bg-neutral-100 text-[#141414] text-[9px] font-black flex items-center justify-center border border-[#141414]/20">
+                  {index + 5}
+                </span>
+                <span className="text-[8px] font-mono text-red-600 font-extrabold uppercase block tracking-wider mb-2">Output & Feedback Block</span>
+                <h3 className="font-serif italic text-sm text-[#141414] mb-2">{node.title}</h3>
+                <p className="text-[10px] text-[#141414]/50 line-clamp-2 tracking-tight leading-normal">{node.description}</p>
+              </button>
+            ))}
+          </div>
+
+          <AnimatePresence mode="wait">
+            {selectedNodeId && (
+              <motion.div
+                key={selectedNodeId}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="bg-white border-2 border-[#141414] p-6 shadow-[12px_12px_0px_0px_rgba(0,0,0,0.1)] rounded text-left font-sans grid grid-cols-1 md:grid-cols-3 gap-6"
+              >
+                <div className="md:col-span-1 border-b md:border-b-0 md:border-r border-[#141414]/10 pb-4 md:pb-0 md:pr-6 space-y-2">
+                  <span className="px-2 py-0.5 bg-red-100 text-red-900 border border-red-200 text-[8px] font-extrabold uppercase tracking-widest rounded-sm">BLOCK PARAMETERS</span>
+                  <h3 className="font-serif italic text-xl text-[#141414] pt-1">
+                    {steps.find(x => x.id === selectedNodeId)?.title}
+                  </h3>
+                  <p className="text-[11px] text-[#141414]/75 leading-relaxed font-mono bg-neutral-50 p-3 rounded mt-4">
+                    🛠️ <strong className="text-neutral-800">Operational engine:</strong> {steps.find(x => x.id === selectedNodeId)?.tech}
+                  </p>
+                </div>
+                <div className="md:col-span-2 space-y-4">
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-black uppercase text-[#141414]/50 tracking-wider">Dynamic System Narrative</span>
+                    <p className="text-xs text-[#141414]/80 leading-relaxed">
+                      {steps.find(x => x.id === selectedNodeId)?.description}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                    <div className="p-3 bg-neutral-50 border rounded text-[10px]">
+                      <span className="font-extrabold uppercase tracking-wide text-green-700 block mb-1">Received Inputs:</span>
+                      <ul className="list-disc pl-4 space-y-1 text-[#141414]/70">
+                        {steps.find(x => x.id === selectedNodeId)?.inputs.map((inp, idx) => (
+                          <li key={idx}>{inp}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="p-3 bg-neutral-50 border rounded text-[10px]">
+                      <span className="font-extrabold uppercase tracking-wide text-blue-700 block mb-1">Generated Deliverables:</span>
+                      <ul className="list-disc pl-4 space-y-1 text-[#141414]/70">
+                        {steps.find(x => x.id === selectedNodeId)?.outputs.map((out, idx) => (
+                          <li key={idx}>{out}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : activeTab === 'presentation' ? (
+        /* Client Pitch & Proposal Board View */
+        <div className="flex-grow flex flex-col lg:flex-row gap-6 min-h-0 overflow-y-auto lg:overflow-hidden pb-4">
+          
+          {/* Deck Sidebar list (Left side of presentation view) */}
+          <div className="flex flex-col bg-white border-2 border-[#141414] p-4 shadow-[5px_5px_0px_0px_rgba(0,0,0,0.08)] overflow-y-auto lg:w-1/3 h-full rounded text-left">
+            <div className="mb-4 pb-3 border-b border-[#141414]/10 flex items-center justify-between">
+              <div>
+                <span className="text-[8px] font-mono text-red-600 font-extrabold uppercase tracking-widest">Client Pitch Sections</span>
+                <h3 className="font-serif italic text-sm text-[#141414] font-bold">Interactive Briefing Deck</h3>
+              </div>
+              <button
+                type="button"
+                onClick={generateClientProposal}
+                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[9px] font-black uppercase tracking-wider transition-all flex items-center gap-1 shadow-sm rounded-sm"
+              >
+                <Download size={10} /> proposal pdf
+              </button>
+            </div>
+            
+            <div className="space-y-2">
+              {presentationSlides.map((slide, idx) => (
+                <button
+                  type="button"
+                  key={idx}
+                  onClick={() => { setActiveSlide(idx); }}
+                  className={`w-full text-left p-3.5 border transition-all rounded flex flex-col ${
+                    activeSlide === idx 
+                      ? 'border-[#141414] bg-[#141414] text-white shadow-md' 
+                      : 'border-[#141414]/15 bg-neutral-50/50 hover:bg-white text-[#141414] hover:border-[#141414]/40'
+                  }`}
+                >
+                  <span className={`text-[8px] font-mono uppercase tracking-widest ${activeSlide === idx ? 'text-amber-400' : 'text-[#141414]/55'}`}>
+                    Slide {idx + 1}
+                  </span>
+                  <span className="font-serif italic text-xs font-bold leading-tight mt-1">{slide.title}</span>
+                  <span className="text-[10px] mt-1 line-clamp-1 opacity-70">{slide.subtitle}</span>
+                </button>
+              ))}
+            </div>
+            
+            {/* Call to action proposal builder */}
+            <div className="mt-6 p-4 border border-dashed border-emerald-600/40 bg-emerald-50/30 rounded-lg text-left">
+              <span className="text-[8px] font-mono text-emerald-800 font-black uppercase tracking-widest block mb-1">PROPOSAL GENERATOR</span>
+              <p className="text-[10px] text-emerald-950 leading-relaxed mb-3 font-sans">
+                Download a perfectly organized Commercial Brief summarizing this system for your enterprise clients. Contains stack configurations, exact API definitions, and verified ROI scopes.
+              </p>
+              <button
+                type="button"
+                onClick={generateClientProposal}
+                className="w-full text-center py-2 bg-[#141414] hover:bg-neutral-800 text-white text-[10px] font-bold uppercase tracking-wider transition-all rounded shadow-sm flex items-center justify-center gap-1.5"
+              >
+                <FileText size={12} /> Download PDF Deck Draft
+              </button>
+            </div>
+          </div>
+          
+          {/* Active slide container (Right side of presentation view) */}
+          <div className="flex flex-col bg-white border-2 border-[#141414] p-6 lg:p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] justify-between lg:w-2/3 h-full rounded text-left">
+            <div className="space-y-6">
+              
+              {/* Slide header banner */}
+              <div className="border-b-2 border-dashed border-[#141414]/15 pb-4 text-left">
+                <div className="flex justify-between items-center">
+                  <span className="px-2 py-0.5 bg-red-100 text-red-950 border border-red-200 text-[8px] font-mono tracking-widest uppercase font-extrabold rounded">
+                    Enterprise Presentation Slide
+                  </span>
+                  <span className="text-[10px] font-mono font-bold text-[#141414]/40">
+                    SLIDE {activeSlide + 1} OF {presentationSlides.length}
+                  </span>
+                </div>
+                <h2 className="font-serif italic text-2xl text-[#141414] mt-2 leading-snug">
+                  {presentationSlides[activeSlide].title}
+                </h2>
+                <p className="text-xs text-[#141414]/55 font-mono italic mt-1">
+                  {presentationSlides[activeSlide].subtitle}
+                </p>
+              </div>
+              
+              {/* Dynamic core pitch info */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 text-left">
+                
+                {/* The Challenge Side */}
+                <div className="space-y-3 bg-red-50/40 p-4 border border-red-100 rounded">
+                  <span className="text-[8px] font-mono text-red-700 font-black uppercase tracking-widest block">THE CORE PAIN POINT</span>
+                  <p className="text-[11px] lg:text-xs text-red-900 leading-relaxed font-sans">
+                    {presentationSlides[activeSlide].challenge}
+                  </p>
+                </div>
+                
+                {/* The Solution Side */}
+                <div className="space-y-3 bg-emerald-50/40 p-4 border border-emerald-100 rounded">
+                  <span className="text-[8px] font-mono text-emerald-800 font-black uppercase tracking-widest block">OUR VALUE-ADD SOLUTION</span>
+                  <p className="text-[11px] lg:text-xs text-emerald-950 leading-relaxed font-sans">
+                    {presentationSlides[activeSlide].solution}
+                  </p>
+                </div>
+              </div>
+              
+              {/* Metric highlights / value delivery */}
+              <div className="pt-4 text-left font-mono">
+                <span className="text-[9px] font-mono text-[#141414]/40 uppercase tracking-wider block mb-3">Slide Performance & Value Pillars:</span>
+                <div className="grid grid-cols-3 gap-3">
+                  {presentationSlides[activeSlide].kpis.map((kpi, idx) => (
+                    <div key={idx} className="bg-neutral-50 border border-neutral-200 p-3 rounded text-left">
+                      <span className="block text-[8px] text-[#141414]/50 uppercase tracking-wider font-mono line-clamp-1">{kpi.label}</span>
+                      <strong className="text-[14px] lg:text-[18px] text-[#141414] mt-0.5 block leading-none font-sans font-black">{kpi.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+            </div>
+            
+            {/* Navigator controller footer */}
+            <div className="pt-6 border-t border-[#141414]/10 mt-6 flex justify-between items-center text-left">
+              <span className="text-[9px] font-mono text-[#141414]/40 hidden md:block">
+                Tip: Direct clients to the bottom PDF brief for printed materials.
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveSlide((prev) => (prev - 1 + presentationSlides.length) % presentationSlides.length)}
+                  className="px-3 py-1.5 border border-[#141414]/15 bg-neutral-50 text-[10px] uppercase font-black text-[#141414]/70 hover:bg-[#141414] hover:text-white transition-all rounded shadow-sm"
+                >
+                  ◀ Preceding Slide
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSlide((prev) => (prev + 1) % presentationSlides.length)}
+                  className="px-3 py-1.5 bg-[#141414] text-white text-[10px] uppercase font-black hover:bg-neutral-800 transition-all rounded shadow-sm"
+                >
+                  Succeeding Slide ▶
+                </button>
+              </div>
+            </div>
+            
+          </div>
+          
+        </div>
+      ) : (
+        /* 🎬 Project Video Creator & Screen Recorder Tab View */
+        <div className="flex-grow flex flex-col lg:flex-row gap-6 min-h-0 overflow-y-auto lg:overflow-hidden pb-4">
+          
+          {/* Left panel - Recording Controls & Settings */}
+          <div className="flex flex-col bg-white border-2 border-[#141414] p-5 shadow-[5px_5px_0px_0px_rgba(0,0,0,0.08)] overflow-y-auto lg:w-1/2 h-full rounded text-left">
+            
+            <div className="mb-4 pb-4 border-b border-[#141414]/10">
+              <span className="text-[8px] font-mono text-red-600 font-extrabold uppercase tracking-widest block">Project Media Suite</span>
+              <h3 className="font-serif italic text-base text-[#141414] font-bold">In-App HD Screen & Audio Recorder</h3>
+              <p className="text-[11px] text-[#141414]/60 mt-1 leading-relaxed">
+                Create a professional video of this project directly from your browser. Record the app walkthrough automatically, optionally including your microphone or live AI voice narration.
+              </p>
+            </div>
+
+            {/* Recording Status Panel */}
+            <div className={`p-4 border-2 rounded-lg mb-6 transition-all ${
+              recordingState === 'recording' 
+                ? 'border-red-600 bg-red-50/20 shadow-md' 
+                : 'bg-neutral-50 border-[#141414]/10'
+            }`}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[9px] font-mono text-[#141414]/50 uppercase tracking-wider font-extrabold">Recording Status</span>
+                {recordingState === 'recording' ? (
+                  <span className="flex items-center gap-1.5 px-2 py-0.5 bg-red-600 text-white text-[8px] font-mono font-black tracking-wider uppercase rounded-sm">
+                    <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping" /> REC
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 bg-neutral-200 text-neutral-700 text-[8px] font-mono font-black tracking-wider uppercase rounded-sm">
+                    {recordingState.toUpperCase()}
+                  </span>
+                )}
+              </div>
+
+              {recordingState === 'recording' ? (
+                <div className="space-y-2 text-center py-2">
+                  <span className="text-3xl font-mono font-black text-red-600 block">
+                    {Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}
+                  </span>
+                  <p className="text-[10px] text-red-950 font-sans">
+                    Screen capture is currently active! Narrate through your microphone or let the AI guide you. Click <strong>Stop & Finalize Video</strong> when your walkthrough is complete.
+                  </p>
+                </div>
+              ) : recordingState === 'preparing' ? (
+                <div className="space-y-2 text-center py-4">
+                  <Loader2 className="animate-spin text-red-600 mx-auto" size={24} />
+                  <p className="text-[10px] text-neutral-600 font-sans">
+                    Please select the window, screen, or browser tab you would like to record in the system prompt...
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="text-center py-2">
+                    <Video className="text-[#141414]/30 mx-auto mb-2" size={32} />
+                    <span className="text-xs font-mono font-extrabold text-[#141414]/60 block uppercase">No Active Recording</span>
+                    <p className="text-[9px] text-[#141414]/50 font-sans mt-0.5">Configure your parameters below to get started.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Settings Forms */}
+            <div className="space-y-4 mb-6">
+              <span className="text-[8px] font-mono text-neutral-400 font-black uppercase tracking-wider block">MEDIA CAPTURE SETTINGS:</span>
+              
+              {/* Toggle Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsMicEnabled(!isMicEnabled)}
+                  className={`p-3 border rounded text-left transition-all flex flex-col justify-between ${
+                    isMicEnabled 
+                      ? 'border-indigo-600 bg-indigo-50/10' 
+                      : 'border-neutral-200 bg-neutral-50/30 hover:bg-neutral-50'
+                  }`}
+                  disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
+                >
+                  <span className="text-[8px] font-mono text-neutral-400 font-extrabold uppercase block mb-1">VOICEOVER COMMENTARY</span>
+                  <strong className="text-xs text-[#141414] block">🎤 Record Microphone</strong>
+                  <span className="text-[9px] text-[#141414]/55 mt-1 block">Overlay your own voice as you click and navigate.</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsVoiceoverNarratorEnabled(!isVoiceoverNarratorEnabled)}
+                  className={`p-3 border rounded text-left transition-all flex flex-col justify-between ${
+                    isVoiceoverNarratorEnabled 
+                      ? 'border-emerald-600 bg-emerald-50/10' 
+                      : 'border-neutral-200 bg-neutral-50/30 hover:bg-neutral-50'
+                  }`}
+                  disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
+                >
+                  <span className="text-[8px] font-mono text-neutral-400 font-extrabold uppercase block mb-1">AUTO NARRATION</span>
+                  <strong className="text-xs text-[#141414] block">🗣️ Automated Voice Reader</strong>
+                  <span className="text-[9px] text-[#141414]/55 mt-1 block">System will read slide details aloud as they change.</span>
+                </button>
+              </div>
+
+              {/* Director Autoplay and step duration */}
+              <div className="p-4 border border-[#141414]/10 rounded-lg bg-neutral-50/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <strong className="text-xs text-[#141414] block">🔄 Director Autoplay Mode</strong>
+                    <span className="text-[9px] text-[#141414]/50">Auto-walks through the 7 system steps automatically when you record.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={isDirectorModeEnabled}
+                    onChange={(e) => setIsDirectorModeEnabled(e.target.checked)}
+                    className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 border-neutral-300 rounded cursor-pointer"
+                    disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
+                  />
+                </div>
+
+                {isDirectorModeEnabled && (
+                  <div className="pt-2 border-t border-[#141414]/5">
+                    <div className="flex justify-between text-[10px] font-mono mb-1 text-[#141414]/70">
+                      <span>Step Duration:</span>
+                      <span className="font-extrabold">{autoAdvanceInterval} seconds</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={3}
+                      max={12}
+                      value={autoAdvanceInterval}
+                      onChange={(e) => setAutoAdvanceInterval(parseInt(e.target.value))}
+                      className="w-full accent-[#141414]"
+                      disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
+                    />
+                    <span className="text-[8px] font-mono text-neutral-400 block mt-1">
+                      Total video length will be {autoAdvanceInterval * steps.length} seconds.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              {recordingState !== 'recording' ? (
+                <button
+                  type="button"
+                  onClick={startRecording}
+                  className="flex-grow py-3 bg-red-600 hover:bg-red-700 text-white font-mono text-[10px] font-black uppercase tracking-widest rounded-lg shadow-sm transition-all flex items-center justify-center gap-2"
+                >
+                  <span className="w-2.5 h-2.5 bg-white rounded-full animate-pulse" /> Launch & Record Video
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={stopRecording}
+                  className="flex-grow py-3 bg-[#141414] hover:bg-neutral-800 text-white font-mono text-[10px] font-black uppercase tracking-widest rounded-lg shadow-sm transition-all flex items-center justify-center gap-2"
+                >
+                  <span className="w-2.5 h-2.5 bg-red-600 rounded-sm" /> Stop & Finalize Video
+                </button>
+              )}
+            </div>
+
+          </div>
+
+          {/* Right panel - Video Review & Exports */}
+          <div className="flex flex-col bg-white border-2 border-[#141414] p-5 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] overflow-y-auto lg:w-1/2 h-full rounded text-left">
+            <div className="mb-4 pb-3 border-b border-[#141414]/10">
+              <span className="text-[8px] font-mono text-emerald-700 font-extrabold uppercase tracking-widest">Recorded Output</span>
+              <h3 className="font-serif italic text-base text-[#141414] font-bold">Review & Download Vault</h3>
+            </div>
+
+            {recordedUrl ? (
+              <div className="space-y-4">
+                <div className="bg-neutral-950 p-2 rounded-lg border-2 border-neutral-900 shadow-md overflow-hidden">
+                  <video 
+                    src={recordedUrl} 
+                    controls 
+                    className="w-full max-h-[280px] bg-black rounded" 
+                  />
+                </div>
+
+                <div className="p-4 border border-emerald-200 bg-emerald-50/40 rounded-lg space-y-3">
+                  <div>
+                    <span className="text-[8px] font-mono text-emerald-800 font-black uppercase tracking-widest block mb-1">SUCCESSFULLY CAPTURED</span>
+                    <strong className="text-xs text-emerald-950 block">Your video has been compiled!</strong>
+                    <p className="text-[10px] text-emerald-900 leading-relaxed mt-0.5">
+                      Your high-resolution walk-through of the Sales Return QC Report (GRN) Management system has been stored in memory. You can save it permanently below.
+                    </p>
+                  </div>
+
+                  <a
+                    href={recordedUrl}
+                    download="QualityControl_Project_Walkthrough_Video.webm"
+                    className="w-full text-center py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase tracking-widest transition-all rounded shadow-sm flex items-center justify-center gap-2"
+                  >
+                    <Download size={12} /> Download Project Video
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-grow flex flex-col items-center justify-center border-2 border-dashed border-[#141414]/15 rounded-lg p-6 text-center text-[#141414]/40 min-h-[250px]">
+                <Video className="mb-2 text-[#141414]/20" size={36} />
+                <span className="text-xs font-mono font-bold uppercase tracking-wider">No Video Rendered Yet</span>
+                <p className="text-[10px] text-[#141414]/55 max-w-sm mt-1 leading-relaxed">
+                  When you complete a recording session, your playable and exportable file will appear here. Try triggering the <strong>"Launch & Record Video"</strong> feature to capture your work.
+                </p>
+              </div>
+            )}
+
+            {/* Quick Walkthrough Reference Guide */}
+            <div className="mt-5 p-4 bg-indigo-50 border border-indigo-200 rounded-lg text-left font-sans">
+              <span className="text-[8px] font-mono text-indigo-900 font-black uppercase tracking-widest block mb-1">💡 PRO RECORDING SECRETS</span>
+              <ul className="text-[10px] text-indigo-950 space-y-2 list-disc pl-4">
+                <li>
+                  <strong>Open in New Tab:</strong> For the absolute best recording performance and clear system sound, click the "Open in new tab" icon at the top right of AI Studio.
+                </li>
+                <li>
+                  <strong>Tab Sound Recording:</strong> When the browser asks which screen to record, choose the **"Chrome Tab"** or **"Active Tab"** option and check the **"Share tab audio"** checkbox to record the system's scan sounds!
+                </li>
+                <li>
+                  <strong>Seamless Walkthrough:</strong> "Director Mode" handles all transitions, clicking, and voice narration automatically. Just sit back, watch the system perform the live audit, and collect your final video file!
+                </li>
+              </ul>
+            </div>
+
+          </div>
+
+        </div>
+      )}
     </div>
   );
 }
