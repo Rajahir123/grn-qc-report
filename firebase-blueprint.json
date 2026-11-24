@@ -82,6 +82,18 @@
         "addedBy": { "type": "string" }
       },
       "required": ["name", "createdAt"]
+    },
+    "MasterSku": {
+      "title": "Master SKU",
+      "description": "A custom SKU mapping added by a user in the Inventory Picker panel.",
+      "type": "object",
+      "properties": {
+        "oldSku": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "newSku": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "addedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["oldSku", "newSku", "createdAt", "addedBy"]
     }
   },
   "firestore": {
@@ -96,6 +108,10 @@
     "/masterParties/{partyId}": {
       "schema": "MasterParty",
       "description": "Universal list of parties shared across the system."
+    },
+    "/masterSkus/{skuId}": {
+      "schema": "MasterSku",
+      "description": "Custom SKU mappings added via the Inventory Picker panel."
     }
   }
 }

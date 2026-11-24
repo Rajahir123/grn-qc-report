@@ -1809,9 +1809,154 @@ function QCReportView() {
   };
 
   const [isSkuPickerOpen, setIsSkuPickerOpen] = useState(false);
+  const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
+  const [customSkus, setCustomSkus] = useState<SKUMapping[]>(() => {
+    try {
+      const saved = localStorage.getItem('qc_custom_skus');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [skuSearch, setSkuSearch] = useState('');
+  const [showAddSkuForm, setShowAddSkuForm] = useState(false);
+  const [newOldSku, setNewOldSku] = useState('');
+  const [newNewSku, setNewNewSku] = useState('');
+  const [skuFormError, setSkuFormError] = useState('');
+  const [isAddingSku, setIsAddingSku] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const skipNextSave = useRef(false);
+
+  const getSkuKey = (sku: SKUMapping) => `${sku.oldSku}\u0000${sku.newSku}`;
+
+  const allSkus = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: (SKUMapping & { isCustom?: boolean })[] = [];
+    for (const sku of customSkus) {
+      const norm = `${sku.oldSku.trim().toUpperCase()}\u0000${sku.newSku.trim().toUpperCase()}`;
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        merged.push({ ...sku, isCustom: true });
+      }
+    }
+    for (const sku of SKUS) {
+      const norm = `${sku.oldSku.trim().toUpperCase()}\u0000${sku.newSku.trim().toUpperCase()}`;
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        merged.push(sku);
+      }
+    }
+    return merged;
+  }, [customSkus]);
+
+  const filteredSkus = useMemo(() => {
+    const q = skuSearch.trim().toLowerCase();
+    if (!q) return allSkus;
+    return allSkus.filter(
+      s => s.oldSku.toLowerCase().includes(q) || s.newSku.toLowerCase().includes(q)
+    );
+  }, [allSkus, skuSearch]);
+
+  useEffect(() => {
+    let unsubscribeSnapshot: (() => void) | null = null;
+
+    const attachSkuListener = () => {
+      if (!auth.currentUser) return;
+      if (unsubscribeSnapshot) unsubscribeSnapshot();
+      const q = query(collection(db, 'masterSkus'), orderBy('createdAt', 'desc'));
+      unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
+        const fetched = snapshot.docs.map(d => {
+          const data = d.data();
+          return {
+            oldSku: String(data.oldSku || ''),
+            newSku: String(data.newSku || '')
+          } as SKUMapping;
+        }).filter(s => s.oldSku.trim().length > 0);
+        setCustomSkus(fetched);
+        try {
+          localStorage.setItem('qc_custom_skus', JSON.stringify(fetched));
+        } catch {
+          // ignore storage quota errors
+        }
+      }, (error) => {
+        console.error('Error loading custom SKUs:', error);
+      });
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) attachSkuListener();
+    });
+
+    if (auth.currentUser) {
+      attachSkuListener();
+    }
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeSnapshot) unsubscribeSnapshot();
+    };
+  }, []);
+
+  const handleAddCustomSku = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSkuFormError('');
+    const trimmedOld = newOldSku.trim().toUpperCase().slice(0, 64);
+    const trimmedNew = newNewSku.trim().toUpperCase().slice(0, 64);
+
+    if (!trimmedOld) {
+      setSkuFormError('Old SKU is required.');
+      return;
+    }
+
+    const exists = allSkus.some(
+      s => s.oldSku.trim().toUpperCase() === trimmedOld && s.newSku.trim().toUpperCase() === trimmedNew
+    );
+    if (exists) {
+      setSkuFormError('This SKU already exists in the list.');
+      return;
+    }
+
+    setIsAddingSku(true);
+    const newEntry: SKUMapping = { oldSku: trimmedOld, newSku: trimmedNew };
+    const key = getSkuKey(newEntry);
+
+    try {
+      setCustomSkus(prev => {
+        const next = [newEntry, ...prev];
+        try {
+          localStorage.setItem('qc_custom_skus', JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+
+      if (auth.currentUser) {
+        await addDoc(collection(db, 'masterSkus'), {
+          oldSku: trimmedOld,
+          newSku: trimmedNew,
+          createdAt: serverTimestamp(),
+          addedBy: auth.currentUser.uid
+        });
+      }
+
+      setSelectedSkus(prev => (prev.includes(key) ? prev : [...prev, key]));
+      setNewOldSku('');
+      setNewNewSku('');
+      setSkuSearch('');
+      setShowAddSkuForm(false);
+    } catch (error) {
+      console.error('Failed to save SKU to Firestore:', error);
+      setSelectedSkus(prev => (prev.includes(key) ? prev : [...prev, key]));
+      setNewOldSku('');
+      setNewNewSku('');
+      setSkuSearch('');
+      setShowAddSkuForm(false);
+    } finally {
+      setIsAddingSku(false);
+    }
+  };
 
   // Load draft on mount or board change
   useEffect(() => {
@@ -2878,32 +3023,253 @@ function QCReportView() {
               initial={{ opacity: 0, y: 20, scale: 0.9 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 20, scale: 0.9 }}
-              className="bg-white border-2 border-[#141414] p-4 lg:p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-2xl w-[90vw] sm:w-80 max-h-[60vh] sm:max-h-[400px] flex flex-col"
+              className="bg-white border-2 border-[#141414] p-4 lg:p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] lg:shadow-2xl w-[90vw] sm:w-96 max-h-[70vh] sm:max-h-[480px] flex flex-col"
             >
-              <h3 className="text-xs font-black uppercase tracking-widest mb-4 flex items-center justify-between">
-                Inventory Picker
-                <X size={14} className="cursor-pointer" onClick={() => setIsSkuPickerOpen(false)} />
-              </h3>
-              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
-                {SKUS.map(sku => (
-                  <button 
-                    key={sku.oldSku} 
-                    onClick={() => addSku(sku)}
-                    className="w-full p-3 border border-[#141414]/10 hover:border-[#141414] hover:bg-[#141414] hover:text-white group transition-all"
+              <div className="flex items-center justify-between mb-3 gap-2">
+                <h3 className="text-xs font-black uppercase tracking-widest">
+                  Inventory Picker
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddSkuForm(prev => !prev);
+                      setSkuFormError('');
+                      if (!showAddSkuForm && skuSearch.trim()) {
+                        setNewOldSku(skuSearch.trim().toUpperCase());
+                      }
+                    }}
+                    className={`px-2.5 py-1 border border-[#141414] text-[9px] font-black uppercase tracking-wider flex items-center gap-1 transition-all ${
+                      showAddSkuForm
+                        ? 'bg-[#141414] text-white'
+                        : 'bg-white text-[#141414] hover:bg-[#141414] hover:text-white'
+                    }`}
                   >
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] font-black uppercase tracking-tight">{sku.oldSku}</span>
-                      <ChevronRight size={12} className="opacity-0 group-hover:opacity-100" />
-                      <span className="text-[9px] font-mono opacity-40 group-hover:opacity-60">{sku.newSku}</span>
-                    </div>
+                    <Plus size={10} className={showAddSkuForm ? 'rotate-45 transition-transform' : 'transition-transform'} />
+                    {showAddSkuForm ? 'Close' : 'Add SKU'}
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSkuPickerOpen(false);
+                      setSelectedSkus([]);
+                      setShowAddSkuForm(false);
+                      setSkuSearch('');
+                      setSkuFormError('');
+                    }}
+                    className="p-1 hover:bg-gray-100 transition-colors"
+                    aria-label="Close Inventory Picker"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               </div>
+
+              {showAddSkuForm && (
+                <form onSubmit={handleAddCustomSku} className="mb-3 p-3 bg-gray-50 border-2 border-[#141414] space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-[#141414]/70">New SKU Entry</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <div>
+                      <label className="text-[8px] font-black uppercase tracking-wider opacity-60 block mb-0.5">
+                        Old SKU *
+                      </label>
+                      <input
+                        type="text"
+                        value={newOldSku}
+                        onChange={(e) => {
+                          setNewOldSku(e.target.value);
+                          setSkuFormError('');
+                        }}
+                        placeholder="e.g. NCR1KG"
+                        maxLength={64}
+                        autoFocus
+                        className="w-full bg-white border border-[#141414] px-2.5 py-1.5 text-[11px] font-bold uppercase focus:outline-none focus:ring-1 focus:ring-[#141414]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[8px] font-black uppercase tracking-wider opacity-60 block mb-0.5">
+                        New SKU (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={newNewSku}
+                        onChange={(e) => {
+                          setNewNewSku(e.target.value);
+                          setSkuFormError('');
+                        }}
+                        placeholder="e.g. NT-CR-1000"
+                        maxLength={64}
+                        className="w-full bg-white border border-[#141414] px-2.5 py-1.5 text-[11px] font-mono uppercase focus:outline-none focus:ring-1 focus:ring-[#141414]"
+                      />
+                    </div>
+                  </div>
+                  {skuFormError && (
+                    <p className="text-[9px] font-bold text-red-600 uppercase tracking-tight">{skuFormError}</p>
+                  )}
+                  <div className="flex gap-2 pt-0.5">
+                    <button
+                      type="submit"
+                      disabled={isAddingSku}
+                      className="flex-1 bg-[#141414] text-white py-2 text-[9px] font-black uppercase tracking-widest hover:bg-black transition-colors disabled:opacity-50"
+                    >
+                      {isAddingSku ? 'Saving...' : 'Save & Select'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddSkuForm(false);
+                        setSkuFormError('');
+                      }}
+                      className="px-3 py-2 border border-[#141414] bg-white text-[9px] font-black uppercase tracking-wider hover:bg-gray-100 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              <div className="relative mb-3">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 opacity-40" />
+                <input
+                  type="text"
+                  value={skuSearch}
+                  onChange={(e) => setSkuSearch(e.target.value)}
+                  placeholder="Search Old or New SKU..."
+                  className="w-full bg-gray-50 border border-[#141414]/30 focus:border-[#141414] py-2 pl-8 pr-7 text-[11px] font-bold uppercase focus:outline-none focus:bg-white transition-colors"
+                />
+                {skuSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setSkuSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-100"
+                    aria-label="Clear SKU search"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                {skuSearch.trim() && !allSkus.some(s => s.oldSku.toLowerCase() === skuSearch.trim().toLowerCase() || s.newSku.toLowerCase() === skuSearch.trim().toLowerCase()) && !showAddSkuForm && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewOldSku(skuSearch.trim().toUpperCase());
+                      setNewNewSku('');
+                      setSkuFormError('');
+                      setShowAddSkuForm(true);
+                    }}
+                    className="w-full p-2.5 border-2 border-dashed border-[#141414] bg-blue-50/60 hover:bg-blue-50 text-left transition-all flex items-center justify-between gap-2"
+                  >
+                    <div>
+                      <span className="text-[8px] font-black uppercase tracking-widest text-blue-700 block">Not in list</span>
+                      <span className="text-[10px] font-black uppercase text-[#141414]">
+                        + Add &ldquo;{skuSearch.trim().toUpperCase()}&rdquo; as New SKU
+                      </span>
+                    </div>
+                    <Plus size={14} className="text-[#141414] shrink-0" />
+                  </button>
+                )}
+
+                {filteredSkus.length > 0 ? (
+                  filteredSkus.map(sku => {
+                    const key = getSkuKey(sku);
+                    const isSelected = selectedSkus.includes(key);
+                    return (
+                      <button 
+                        key={key} 
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedSkus(selectedSkus.filter(s => s !== key));
+                          } else {
+                            setSelectedSkus([...selectedSkus, key]);
+                          }
+                        }}
+                        className={`w-full p-3 border transition-all flex items-center gap-3 group
+                          ${isSelected 
+                            ? 'border-[#141414] bg-[#141414] text-white' 
+                            : 'border-[#141414]/10 hover:border-[#141414] hover:bg-gray-50 text-[#141414]'}`}
+                      >
+                        <div className={`w-4 h-4 border flex items-center justify-center shrink-0
+                          ${isSelected ? 'border-white bg-white' : 'border-[#141414]/20 bg-white group-hover:border-[#141414]'}`}>
+                          {isSelected && <div className="w-2 h-2 bg-[#141414]" />}
+                        </div>
+                        <div className="flex-1 flex justify-between items-center gap-2 min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-[10px] font-black uppercase tracking-tight truncate">{sku.oldSku}</span>
+                            {sku.isCustom && (
+                              <span className={`text-[7px] font-black uppercase px-1 py-0.5 border shrink-0 ${
+                                isSelected ? 'border-white/40 text-white/90' : 'border-[#141414]/20 text-[#141414]/60'
+                              }`}>
+                                Custom
+                              </span>
+                            )}
+                          </div>
+                          <span className={`text-[9px] font-mono shrink-0 ${isSelected ? 'opacity-80' : 'opacity-40 group-hover:opacity-60'}`}>{sku.newSku}</span>
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="py-6 text-center text-[10px] font-bold uppercase tracking-widest opacity-40">
+                    No matching SKUs
+                  </div>
+                )}
+              </div>
+              {selectedSkus.length > 0 && (
+                <div className="pt-4 border-t border-[#141414]/10 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newRows = selectedSkus.map(key => {
+                        const sku = allSkus.find(s => getSkuKey(s) === key);
+                        return {
+                          oldSku: sku?.oldSku || '',
+                          newSku: sku?.newSku || '',
+                          billQtyUnit: 0,
+                          receivedUnit: 0,
+                          notReceivedUnit: 0,
+                          expiredUnit: 0,
+                          damagesRepairable: 0,
+                          rejectNonRepairable: 0,
+                          use: '',
+                          batchCode: '',
+                          mfgDate: '',
+                          expDate: ''
+                        };
+                      });
+                      
+                      setReport(prev => ({
+                        ...prev,
+                        rows: [...prev.rows, ...newRows]
+                      }));
+                      setSelectedSkus([]);
+                      setSkuSearch('');
+                      setShowAddSkuForm(false);
+                      setIsSkuPickerOpen(false);
+                    }}
+                    className="w-full bg-[#141414] text-white py-3 text-[10px] font-black uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all"
+                  >
+                    Add {selectedSkus.length} Selected SKU{selectedSkus.length > 1 ? 's' : ''}
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
         <button 
-          onClick={() => setIsSkuPickerOpen(!isSkuPickerOpen)}
+          onClick={() => {
+            if (isSkuPickerOpen) {
+              setSelectedSkus([]);
+              setShowAddSkuForm(false);
+              setSkuSearch('');
+              setSkuFormError('');
+            }
+            setIsSkuPickerOpen(!isSkuPickerOpen);
+          }}
           className="w-16 h-16 bg-[#141414] text-white flex items-center justify-center shadow-2xl hover:bg-black transition-all ring-offset-4 ring-[#141414] focus:ring-2"
         >
           <Plus size={32} className={`transition-transform duration-300 ${isSkuPickerOpen ? 'rotate-45' : ''}`} />
@@ -4673,6 +5039,8 @@ function SystemPlaybookView() {
   const [recordingDuration, setRecordingDuration] = useState<number>(0);
   const [autoAdvanceInterval, setAutoAdvanceInterval] = useState<number>(5);
   const [isVoiceoverNarratorEnabled, setIsVoiceoverNarratorEnabled] = useState(true);
+  const [narratorLanguage, setNarratorLanguage] = useState<'en' | 'hi'>('en');
+  const [recordingError, setRecordingError] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -4686,10 +5054,30 @@ function SystemPlaybookView() {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel(); // cancel any active speech
         const step = steps[stepIndex];
-        const textToSpeak = `${step.title}. ${step.description}`;
+        const textToSpeak = narratorLanguage === 'hi'
+          ? `${step.titleHi}. ${step.descriptionHi}`
+          : `${step.title}. ${step.description}`;
         const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.rate = 1.05; // natural pacing
+        utterance.rate = narratorLanguage === 'hi' ? 1.0 : 1.05; // natural pacing for Hindi
         utterance.volume = 0.9;
+        
+        if (narratorLanguage === 'hi') {
+          utterance.lang = 'hi-IN';
+          // Find localized Hindi voice
+          const voices = window.speechSynthesis.getVoices();
+          const hindiVoice = voices.find(v => v.lang.startsWith('hi') || v.lang === 'hi-IN');
+          if (hindiVoice) {
+            utterance.voice = hindiVoice;
+          }
+        } else {
+          utterance.lang = 'en-US';
+          const voices = window.speechSynthesis.getVoices();
+          const englishVoice = voices.find(v => v.lang.startsWith('en'));
+          if (englishVoice) {
+            utterance.voice = englishVoice;
+          }
+        }
+
         window.speechSynthesis.speak(utterance);
       }
     } catch (e) {
@@ -4700,6 +5088,7 @@ function SystemPlaybookView() {
   const startRecording = async () => {
     try {
       setRecordingState('preparing');
+      setRecordingError(null);
       setRecordedBlob(null);
       if (recordedUrl) {
         URL.revokeObjectURL(recordedUrl);
@@ -4801,6 +5190,7 @@ function SystemPlaybookView() {
     } catch (err) {
       console.error("Screen recording setup failed:", err);
       setRecordingState('idle');
+      setRecordingError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -5076,7 +5466,9 @@ function SystemPlaybookView() {
     {
       id: 'connect',
       title: 'Monday.com Integration & Auth',
+      titleHi: 'मंडे डॉट कॉम एकीकरण और प्रमाणीकरण',
       description: 'Establish a secure gateway to Global or European Monday.com workspace boards. Requires a valid personal API token or password access with encrypted token sync.',
+      descriptionHi: 'मंडे डॉट कॉम के ग्लोबल या यूरोपियन वर्कस्पेस बोर्ड से एक सुरक्षित गेटवे स्थापित करें। इसके लिए एक वैध एपीआई टोकन या 1522 पासवर्ड सत्यापन की आवश्यकता होती है।',
       inputs: ['API Token', 'Board Region Selection', '1522 Administrator PIN'],
       outputs: ['Workspace Board Index', 'Synced Metadata Schema', 'Secure Session Session Token'],
       tech: 'Monday GraphQL API (v2024-04), Symmetric Passwords, Dual Endpoint Selectors',
@@ -5085,7 +5477,9 @@ function SystemPlaybookView() {
     {
       id: 'fetch',
       title: 'GRN Cargo Loading & SKU Mapping',
+      titleHi: 'जीआरएन कार्गो लोडिंग और एसकेयू मैपिंग',
       description: 'Fetch goods-receipts in real-time. Automatically parses unstructured item labels and maps legacy item SKUs to standard retail barcodes using advanced client mappings.',
+      descriptionHi: 'माल की रसीदों को वास्तविक समय में लोड करें। यह स्वचालित रूप से बिना संरचना वाले आइटम लेबल को स्कैन करके मानक बारकोड के साथ मैप करता है।',
       inputs: ['Pending Cargo Logs', 'Legacy SKU Identifiers'],
       outputs: ['Clean Barcode Identifiers', 'Formatted Item Specifications', 'Audit-ready Tables'],
       tech: 'Fast Client-Side Mapper (skus.ts), Parallel Fetch API, Monday Native Column Index',
@@ -5094,7 +5488,9 @@ function SystemPlaybookView() {
     {
       id: 'audit',
       title: 'Precision QA assessment form',
+      titleHi: 'सटीक गुणवत्ता नियंत्रण मूल्यांकन फॉर्म',
       description: 'Perform condition grading on batch quantities. Classify goods into Received, Not-Received, Expired, Repairable, or Damaged, and select strategic USE (e.g., FRESH vs RTV).',
+      descriptionHi: 'बैच मात्रा पर स्थिति ग्रेडिंग का मूल्यांकन करें। वस्तुओं को प्राप्त, अनुपलब्ध, समाप्त, मरम्मत योग्य या क्षतिग्रस्त श्रेणियों में विभाजित करें।',
       inputs: ['Batch Quantity Count', 'Physical Condition Grading', 'Batch Code', 'MFG & EXP Alerts'],
       outputs: ['Damage Ratio Percentages', 'Expiring Alerts', 'Valid Disposition States'],
       tech: 'React State Managers, Auto-Sum Formula Checkers, Dynamic alert calculations',
@@ -5103,7 +5499,9 @@ function SystemPlaybookView() {
     {
       id: 'sync',
       title: 'Secure Firestore Database Ledger Sync',
+      titleHi: 'सुरक्षित फायरस्टोर डेटाबेस लेजर सिंक',
       description: 'Publish completed reports to the centralized Firebase Firestore database. The transfer is locked behind strict backend and firestore.rules using the 1522 verification mechanism.',
+      descriptionHi: 'पूरे किए गए रिपोर्ट को फायरस्टोर डेटाबेस में सुरक्षित रूप से सिंक करें। यह डेटा ट्रांसफर 1522 सत्यापन कोड द्वारा सुरक्षित और एन्क्रिप्टेड है।',
       inputs: ['Completed QC Form', 'Inspector Signature Draft'],
       outputs: ['Verifiable Database Record', 'Persistent History Log Entry', 'Firestore Document ID'],
       tech: 'Firebase Firestore SDK, Transaction atomicity, Off-line draft queues',
@@ -5112,7 +5510,9 @@ function SystemPlaybookView() {
     {
       id: 'resizing',
       title: 'Dynamic PDF Layout Calibration',
+      titleHi: 'डायनामिक पीडीएफ लेआउट अंशांकन',
       description: 'Modify physical layout parameters (margins, paddings, table height, text sizes) using continuous sliders to guarantee a perfectly styled, single-page print fit without text overflows.',
+      descriptionHi: 'बिना किसी टेक्स्ट ओवरफ्लो के एक सही सिंगल-पेज प्रिंट फिट सुनिश्चित करने के लिए मार्जिन, पैडिंग और टेबल की ऊंचाई जैसे मापदंडों को लाइव स्लाइडर्स से समायोजित करें।',
       inputs: ['Page Margins (mm)', 'Table Row Spacing (px)', 'Typography Scales'],
       outputs: ['Re-aligned View Canvas', 'Optimized Print Bounds', 'CSS Custom Variables'],
       tech: 'Tailwind CSS Variables, Continuous Slider Hooks, Dynamic Style Remaps',
@@ -5121,7 +5521,9 @@ function SystemPlaybookView() {
     {
       id: 'print-share',
       title: 'High-Fidelity PDF Print & Share',
+      titleHi: 'उच्च-गुणवत्ता पीडीएफ प्रिंट और शेयर',
       description: 'Generate high-contrast vector PDFs. Print using hidden iframe sandbox bridges for safe desktop flows, or dispatch directly to mobile share sheets via navigator sharing.',
+      descriptionHi: 'उच्च-विपरीत वेक्टर पीडीएफ फाइलें तैयार करें। सुरक्षित डेस्कटॉप प्रिंटिंग या सीधे मोबाइल डिवाइस पर शेयर करने के लिए सिस्टम शेयरिंग का उपयोग करें।',
       inputs: ['Custom PDF Spacing Profile', 'Calibrated Grid State'],
       outputs: ['Vector PDF Blob URL', 'Browser Print Dialogue Trigger', 'Native OS Share Modal'],
       tech: 'jsPDF Writer, HTML5 Share API, Median / GoNative Webview Bridge, Dynamic blobs',
@@ -5130,7 +5532,9 @@ function SystemPlaybookView() {
     {
       id: 'analytics',
       title: 'Recursive Trends & Return Heatmaps',
+      titleHi: 'आवर्ती रुझान और रिटर्न हीटमैप्स',
       description: 'Review systemic failure logs. Analytics tracks returning SKU loops recursively, shows worse-performing suppliers, and tracks high-priority expiration risks.',
+      descriptionHi: 'सिस्टम की विफलताओं और खराब प्रदर्शन करने वाले सप्लायरों की समीक्षा करें। यह उच्च-प्राथमिकता वाले समाप्त होने वाले जोखिमों और दोषों को ट्रैक करता है।',
       inputs: ['Firestore Historical Log Ledger', 'Supplier Defect Metrics'],
       outputs: ['Return Loop Network Graph', 'Supplier Pareto Charts', 'Risk Trend-Lines'],
       tech: 'Recharts visualizers, Trend-fitting, Expiry alerts dashboard',
@@ -5164,7 +5568,7 @@ function SystemPlaybookView() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isPlaying, steps.length, autoAdvanceInterval, recordingState, isDirectorModeEnabled, isVoiceoverNarratorEnabled]);
+  }, [isPlaying, steps.length, autoAdvanceInterval, recordingState, isDirectorModeEnabled, isVoiceoverNarratorEnabled, narratorLanguage]);
 
   // Web Audio Synth for 10-Second pitch sound effects
   const playSynthSound = (type: 'swoosh' | 'scan' | 'lock' | 'chime') => {
@@ -5743,21 +6147,31 @@ function SystemPlaybookView() {
           <div className="lg:col-span-4 flex flex-col justify-between bg-white border-2 border-[#141414] p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] overflow-y-auto lg:w-1/3 h-full">
             <div className="space-y-6">
               <div className="border-b border-[#141414]/10 pb-4">
-                <span className="text-[8px] font-mono text-red-600 font-extrabold uppercase tracking-widest">STEP {activeStep + 1} OF 7 DETAILS</span>
-                <h2 className="font-serif italic text-xl text-[#141414] mt-1 leading-tight">{steps[activeStep].title}</h2>
+                <span className="text-[8px] font-mono text-red-600 font-extrabold uppercase tracking-widest">
+                  {narratorLanguage === 'hi' ? `चरण ${activeStep + 1} के 7 विवरण` : `STEP ${activeStep + 1} OF 7 DETAILS`}
+                </span>
+                <h2 className="font-serif italic text-xl text-[#141414] mt-1 leading-tight">
+                  {narratorLanguage === 'hi' ? steps[activeStep].titleHi : steps[activeStep].title}
+                </h2>
               </div>
 
               {/* Paragraph detail */}
               <div className="space-y-2">
-                <span className="text-[9px] font-black uppercase tracking-widest opacity-40 block">Operational Scope:</span>
-                <p className="text-[11px] lg:text-xs text-[#141414]/80 leading-relaxed font-sans">{steps[activeStep].description}</p>
+                <span className="text-[9px] font-black uppercase tracking-widest opacity-40 block">
+                  {narratorLanguage === 'hi' ? 'संचालन विवरण (Scope):' : 'Operational Scope:'}
+                </span>
+                <p className="text-[11px] lg:text-xs text-[#141414]/80 leading-relaxed font-sans">
+                  {narratorLanguage === 'hi' ? steps[activeStep].descriptionHi : steps[activeStep].description}
+                </p>
               </div>
 
               {/* Raw components inputs outputs */}
               <div className="space-y-4 pt-2">
                 <div className="p-3 bg-neutral-50 border border-neutral-200 rounded grid grid-cols-2 gap-4 text-[9px]">
                   <div className="space-y-1">
-                    <span className="font-extrabold uppercase tracking-wider text-green-700 block">Inputs / Variables:</span>
+                    <span className="font-extrabold uppercase tracking-wider text-green-700 block">
+                      {narratorLanguage === 'hi' ? 'इनपुट विवरण:' : 'Inputs / Variables:'}
+                    </span>
                     <ul className="list-disc pl-3.5 space-y-1 text-[#141414]/80">
                       {steps[activeStep].inputs.map((inp, i) => (
                         <li key={i}>{inp}</li>
@@ -5765,7 +6179,9 @@ function SystemPlaybookView() {
                     </ul>
                   </div>
                   <div className="space-y-1">
-                    <span className="font-extrabold uppercase tracking-wider text-blue-700 block">Outputs / Artifacts:</span>
+                    <span className="font-extrabold uppercase tracking-wider text-blue-700 block">
+                      {narratorLanguage === 'hi' ? 'आउटपुट परिणाम:' : 'Outputs / Artifacts:'}
+                    </span>
                     <ul className="list-disc pl-3.5 space-y-1 text-[#141414]/80">
                       {steps[activeStep].outputs.map((out, i) => (
                         <li key={i}>{out}</li>
@@ -5775,7 +6191,9 @@ function SystemPlaybookView() {
                 </div>
 
                 <div className="p-3.5 bg-[#141414]/5 border border-[#141414]/10 rounded font-mono text-[9px] space-y-1">
-                  <span className="font-extrabold uppercase tracking-wider text-[#141414]/60 block">Underlying Tech & Drivers:</span>
+                  <span className="font-extrabold uppercase tracking-wider text-[#141414]/60 block">
+                    {narratorLanguage === 'hi' ? 'तकनीकी इंजन (Tech):' : 'Underlying Tech & Drivers:'}
+                  </span>
                   <p className="text-[#141414]/80 leading-relaxed">{steps[activeStep].tech}</p>
                 </div>
               </div>
@@ -6061,6 +6479,8 @@ function SystemPlaybookView() {
             <div className={`p-4 border-2 rounded-lg mb-6 transition-all ${
               recordingState === 'recording' 
                 ? 'border-red-600 bg-red-50/20 shadow-md' 
+                : recordingError 
+                ? 'border-amber-600 bg-amber-50/10 shadow-sm'
                 : 'bg-neutral-50 border-[#141414]/10'
             }`}>
               <div className="flex items-center justify-between mb-3">
@@ -6068,6 +6488,10 @@ function SystemPlaybookView() {
                 {recordingState === 'recording' ? (
                   <span className="flex items-center gap-1.5 px-2 py-0.5 bg-red-600 text-white text-[8px] font-mono font-black tracking-wider uppercase rounded-sm">
                     <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping" /> REC
+                  </span>
+                ) : recordingError ? (
+                  <span className="px-2 py-0.5 bg-amber-600 text-white text-[8px] font-mono font-black tracking-wider uppercase rounded-sm">
+                    ATTENTION REQUIRED
                   </span>
                 ) : (
                   <span className="px-2 py-0.5 bg-neutral-200 text-neutral-700 text-[8px] font-mono font-black tracking-wider uppercase rounded-sm">
@@ -6091,6 +6515,31 @@ function SystemPlaybookView() {
                   <p className="text-[10px] text-neutral-600 font-sans">
                     Please select the window, screen, or browser tab you would like to record in the system prompt...
                   </p>
+                </div>
+              ) : recordingError ? (
+                <div className="space-y-3 py-1">
+                  <div className="flex items-start gap-2 text-amber-900">
+                    <span className="text-lg">⚠️</span>
+                    <div>
+                      <strong className="text-xs font-serif italic font-black block">Iframe Security Restrictions (Permissions Policy)</strong>
+                      <p className="text-[10.5px] leading-relaxed mt-1 text-neutral-800">
+                        Modern web browsers disallow screen recording (<code>display-capture</code>) inside a sandboxed iframe window for security.
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="p-2.5 bg-amber-50 border border-amber-200/60 rounded text-[10px] space-y-1.5 text-amber-950 font-sans">
+                    <strong>To record your project video successfully:</strong>
+                    <ol className="list-decimal pl-4 space-y-1">
+                      <li>Click the ↗️ <strong>"Open in new tab"</strong> button at the top-right corner of the AI Studio preview window.</li>
+                      <li>In the new tab, switch back to this <strong>🎬 Project Video Creator</strong> view.</li>
+                      <li>Click <strong>Launch & Record Video</strong> to start recording in high resolution!</li>
+                    </ol>
+                  </div>
+
+                  <div className="text-[9px] font-mono text-neutral-400 select-all p-1 bg-neutral-100 rounded break-all max-h-16 overflow-y-auto">
+                    Error trace: {recordingError}
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -6124,20 +6573,62 @@ function SystemPlaybookView() {
                   <span className="text-[9px] text-[#141414]/55 mt-1 block">Overlay your own voice as you click and navigate.</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => setIsVoiceoverNarratorEnabled(!isVoiceoverNarratorEnabled)}
+                <div
                   className={`p-3 border rounded text-left transition-all flex flex-col justify-between ${
                     isVoiceoverNarratorEnabled 
                       ? 'border-emerald-600 bg-emerald-50/10' 
-                      : 'border-neutral-200 bg-neutral-50/30 hover:bg-neutral-50'
+                      : 'border-neutral-200 bg-neutral-50/30'
                   }`}
-                  disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
                 >
-                  <span className="text-[8px] font-mono text-neutral-400 font-extrabold uppercase block mb-1">AUTO NARRATION</span>
-                  <strong className="text-xs text-[#141414] block">🗣️ Automated Voice Reader</strong>
-                  <span className="text-[9px] text-[#141414]/55 mt-1 block">System will read slide details aloud as they change.</span>
-                </button>
+                  <div>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="text-[8px] font-mono text-neutral-400 font-extrabold uppercase block mb-1">AUTO NARRATION</span>
+                        <strong className="text-xs text-[#141414] block">🗣️ Automated Voice Reader</strong>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={isVoiceoverNarratorEnabled}
+                        onChange={(e) => setIsVoiceoverNarratorEnabled(e.target.checked)}
+                        disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
+                        className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 border-neutral-300 rounded cursor-pointer"
+                      />
+                    </div>
+                    
+                    {isVoiceoverNarratorEnabled && (
+                      <div className="mt-2 pt-2 border-t border-[#141414]/10 flex flex-col gap-1.5">
+                        <span className="text-[8px] font-mono text-neutral-400 font-extrabold uppercase tracking-wider block">Voice Language Selection:</span>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setNarratorLanguage('en')}
+                            disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
+                            className={`py-1 text-[9px] font-black uppercase rounded tracking-wider transition-all text-center ${
+                              narratorLanguage === 'en'
+                                ? 'bg-[#141414] text-white shadow-sm'
+                                : 'bg-neutral-200/50 text-[#141414]/60 hover:bg-neutral-200'
+                            }`}
+                          >
+                            🇺🇸 English
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNarratorLanguage('hi')}
+                            disabled={recordingState !== 'idle' && recordingState !== 'stopped'}
+                            className={`py-1 text-[9px] font-black uppercase rounded tracking-wider transition-all text-center ${
+                              narratorLanguage === 'hi'
+                                ? 'bg-orange-600 text-white shadow-sm'
+                                : 'bg-neutral-200/50 text-[#141414]/60 hover:bg-neutral-200'
+                            }`}
+                          >
+                            🇮🇳 हिन्दी
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[9px] text-[#141414]/55 mt-1 block">Reads slide details aloud automatically as they change.</span>
+                </div>
               </div>
 
               {/* Director Autoplay and step duration */}

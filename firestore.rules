@@ -61,5 +61,21 @@ service cloud.firestore {
                     && request.resource.data.name.size() <= 256
                     && request.resource.data.createdAt == request.time;
     }
+
+    function isValidMasterSku(data) {
+      return data.keys().hasAll(['oldSku', 'newSku', 'createdAt', 'addedBy']) &&
+             data.keys().hasOnly(['oldSku', 'newSku', 'createdAt', 'addedBy']) &&
+             data.oldSku is string && data.oldSku.size() >= 1 && data.oldSku.size() <= 64 &&
+             data.newSku is string && data.newSku.size() <= 64 &&
+             data.addedBy is string && data.addedBy.size() <= 128 && data.addedBy == request.auth.uid &&
+             data.createdAt == request.time;
+    }
+
+    match /masterSkus/{skuId} {
+      allow get: if isSignedIn() && isValidId(skuId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(skuId) && isValidMasterSku(incoming());
+      allow update, delete: if false;
+    }
   }
 }

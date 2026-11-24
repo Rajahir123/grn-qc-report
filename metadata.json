@@ -1,6 +1,6 @@
 {
   "name": "Sales Return QC",
   "description": "Sales Return QC Report (GRN) Management with PDF sharing and mobile support.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone", "display-capture"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
