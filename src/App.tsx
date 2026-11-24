@@ -1762,10 +1762,159 @@ function QCReportView() {
   const [partySearch, setPartySearch] = useState('');
   const [showPartyMenu, setShowPartyMenu] = useState(false);
   const [showTransporterMenu, setShowTransporterMenu] = useState(false);
+  const [customTransporters, setCustomTransporters] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('qc_custom_transporters');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [transporterSearch, setTransporterSearch] = useState('');
+  const [showAddTransporterForm, setShowAddTransporterForm] = useState(false);
+  const [newTransporterName, setNewTransporterName] = useState('');
+  const [transporterFormError, setTransporterFormError] = useState('');
+  const [isAddingTransporter, setIsAddingTransporter] = useState(false);
   const [showStateMenu, setShowStateMenu] = useState(false);
   const [stateSearch, setStateSearch] = useState('');
   const [showCityMenu, setShowCityMenu] = useState(false);
   const [citySearch, setCitySearch] = useState('');
+
+  const allTransporters = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: { name: string; isCustom?: boolean }[] = [];
+    for (const t of customTransporters) {
+      const trimmed = t.trim();
+      const norm = trimmed.toLowerCase();
+      if (trimmed && !seen.has(norm)) {
+        seen.add(norm);
+        merged.push({ name: trimmed, isCustom: true });
+      }
+    }
+    for (const t of TRANSPORTERS) {
+      const trimmed = t.trim();
+      const norm = trimmed.toLowerCase();
+      if (trimmed && !seen.has(norm)) {
+        seen.add(norm);
+        merged.push({ name: t });
+      }
+    }
+    return merged;
+  }, [customTransporters]);
+
+  const filteredTransporters = useMemo(() => {
+    const q = transporterSearch.trim().toLowerCase();
+    if (!q) return allTransporters;
+    return allTransporters.filter(t => t.name.toLowerCase().includes(q));
+  }, [allTransporters, transporterSearch]);
+
+  useEffect(() => {
+    let unsubscribeSnapshot: (() => void) | null = null;
+
+    const attachTransporterListener = () => {
+      if (!auth.currentUser) return;
+      if (unsubscribeSnapshot) unsubscribeSnapshot();
+      const q = query(collection(db, 'masterTransporters'), orderBy('createdAt', 'desc'));
+      unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
+        const fetched = snapshot.docs
+          .map(d => String(d.data().name || '').trim())
+          .filter(Boolean);
+        setCustomTransporters(fetched);
+        try {
+          localStorage.setItem('qc_custom_transporters', JSON.stringify(fetched));
+        } catch {
+          // ignore storage quota errors
+        }
+      }, (error) => {
+        console.error('Error loading custom transporters:', error);
+      });
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) attachTransporterListener();
+    });
+
+    if (auth.currentUser) {
+      attachTransporterListener();
+    }
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeSnapshot) unsubscribeSnapshot();
+    };
+  }, []);
+
+  const addAndSelectTransporter = async (rawName: string) => {
+    const trimmed = rawName.trim().slice(0, 128);
+    if (!trimmed) {
+      setTransporterFormError('Transporter name is required.');
+      return;
+    }
+
+    const existing = allTransporters.find(t => t.name.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      setReport(prev => ({ ...prev, transporter: existing.name }));
+      setNewTransporterName('');
+      setTransporterSearch('');
+      setTransporterFormError('');
+      setShowAddTransporterForm(false);
+      setShowTransporterMenu(false);
+      return;
+    }
+
+    setIsAddingTransporter(true);
+    setTransporterFormError('');
+
+    try {
+      setCustomTransporters(prev => {
+        const next = [trimmed, ...prev];
+        try {
+          localStorage.setItem('qc_custom_transporters', JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+
+      if (auth.currentUser) {
+        await addDoc(collection(db, 'masterTransporters'), {
+          name: trimmed,
+          createdAt: serverTimestamp(),
+          addedBy: auth.currentUser.uid
+        });
+      }
+
+      setReport(prev => ({ ...prev, transporter: trimmed }));
+      setNewTransporterName('');
+      setTransporterSearch('');
+      setShowAddTransporterForm(false);
+      setShowTransporterMenu(false);
+    } catch (error) {
+      console.error('Failed to save transporter to Firestore:', error);
+      setReport(prev => ({ ...prev, transporter: trimmed }));
+      setNewTransporterName('');
+      setTransporterSearch('');
+      setShowAddTransporterForm(false);
+      setShowTransporterMenu(false);
+    } finally {
+      setIsAddingTransporter(false);
+    }
+  };
+
+  const handleAddCustomTransporter = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newTransporterName.trim().slice(0, 128);
+    if (!trimmed) {
+      setTransporterFormError('Transporter name is required.');
+      return;
+    }
+    const exists = allTransporters.some(t => t.name.toLowerCase() === trimmed.toLowerCase());
+    if (exists) {
+      setTransporterFormError('This transporter already exists.');
+      return;
+    }
+    await addAndSelectTransporter(trimmed);
+  };
 
   const getAvailableCities = () => {
     if (report.state && INDIAN_CITIES_BY_STATE[report.state]) {
@@ -2596,7 +2745,15 @@ function QCReportView() {
               <label className="text-[8px] lg:text-[9px] font-black uppercase block opacity-40 lg:mb-1">Transporter</label>
               <div className="relative">
                 <button 
-                  onClick={() => setShowTransporterMenu(!showTransporterMenu)}
+                  type="button"
+                  onClick={() => {
+                    if (showTransporterMenu) {
+                      setShowAddTransporterForm(false);
+                      setTransporterSearch('');
+                      setTransporterFormError('');
+                    }
+                    setShowTransporterMenu(!showTransporterMenu);
+                  }}
                   className="w-full font-mono text-xs lg:text-sm text-left focus:outline-none bg-transparent flex items-center justify-between"
                 >
                   <span className={report.transporter ? 'text-[#141414]' : 'opacity-30'}>
@@ -2613,36 +2770,170 @@ function QCReportView() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         className="fixed inset-0 z-40 bg-transparent"
-                        onClick={() => setShowTransporterMenu(false)}
+                        onClick={() => {
+                          setShowTransporterMenu(false);
+                          setShowAddTransporterForm(false);
+                          setTransporterSearch('');
+                          setTransporterFormError('');
+                        }}
                       />
                       <motion.div 
                         initial={{ opacity: 0, y: 5 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 5 }}
-                        className="absolute left-0 top-full mt-1 w-full min-w-[160px] bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-50 max-h-48 overflow-y-auto custom-scrollbar"
+                        className="absolute right-0 sm:left-0 sm:right-auto top-full mt-1 w-64 sm:w-72 bg-white border-2 border-[#141414] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] z-50 max-h-72 flex flex-col"
                       >
-                        <button
-                          onClick={() => {
-                            setReport({...report, transporter: ''});
-                            setShowTransporterMenu(false);
-                          }}
-                          className="w-full text-left px-3 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600 border-b border-[#141414]/10 transition-all opacity-50 hover:opacity-100"
-                        >
-                          Clear Selection
-                        </button>
-                        {TRANSPORTERS.map(t => (
+                        <div className="p-2.5 border-b-2 border-[#141414] bg-white sticky top-0 z-10 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[9px] font-black uppercase tracking-widest opacity-60">Transporters</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowAddTransporterForm(prev => !prev);
+                                setTransporterFormError('');
+                                if (!showAddTransporterForm && transporterSearch.trim()) {
+                                  setNewTransporterName(transporterSearch.trim());
+                                }
+                              }}
+                              className={`px-2 py-1 border border-[#141414] text-[9px] font-black uppercase tracking-wider flex items-center gap-1 transition-all ${
+                                showAddTransporterForm
+                                  ? 'bg-[#141414] text-white'
+                                  : 'bg-white text-[#141414] hover:bg-[#141414] hover:text-white'
+                              }`}
+                            >
+                              <Plus size={10} className={showAddTransporterForm ? 'rotate-45 transition-transform' : 'transition-transform'} />
+                              {showAddTransporterForm ? 'Close' : 'Add'}
+                            </button>
+                          </div>
+
+                          {showAddTransporterForm ? (
+                            <form onSubmit={handleAddCustomTransporter} className="p-2 bg-gray-50 border border-[#141414] space-y-2">
+                              <div>
+                                <label className="text-[8px] font-black uppercase tracking-wider opacity-60 block mb-0.5">
+                                  Transporter Name *
+                                </label>
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={newTransporterName}
+                                  onChange={(e) => {
+                                    setNewTransporterName(e.target.value);
+                                    setTransporterFormError('');
+                                  }}
+                                  placeholder="e.g. Blue Dart"
+                                  maxLength={128}
+                                  className="w-full bg-white border border-[#141414] px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#141414]"
+                                />
+                              </div>
+                              {transporterFormError && (
+                                <p className="text-[9px] font-bold text-red-600 uppercase tracking-tight">{transporterFormError}</p>
+                              )}
+                              <div className="flex gap-1.5">
+                                <button
+                                  type="submit"
+                                  disabled={isAddingTransporter}
+                                  className="flex-1 bg-[#141414] text-white py-1.5 text-[9px] font-black uppercase tracking-widest hover:bg-black transition-colors disabled:opacity-50"
+                                >
+                                  {isAddingTransporter ? 'Saving...' : 'Save & Select'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowAddTransporterForm(false);
+                                    setTransporterFormError('');
+                                  }}
+                                  className="px-2.5 py-1.5 border border-[#141414] bg-white text-[9px] font-black uppercase tracking-wider hover:bg-gray-100 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="relative">
+                              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 opacity-40" />
+                              <input
+                                type="text"
+                                autoFocus
+                                value={transporterSearch}
+                                onChange={(e) => setTransporterSearch(e.target.value)}
+                                placeholder="Search or add transporter..."
+                                className="w-full bg-[#141414]/5 border border-transparent focus:border-[#141414] focus:bg-white py-1.5 pl-8 pr-7 text-xs font-mono focus:outline-none transition-colors"
+                              />
+                              {transporterSearch && (
+                                <button
+                                  type="button"
+                                  onClick={() => setTransporterSearch('')}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-100"
+                                  aria-label="Clear transporter search"
+                                >
+                                  <X size={11} />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="overflow-y-auto custom-scrollbar flex-1">
+                          {transporterSearch.trim() && !allTransporters.some(t => t.name.toLowerCase() === transporterSearch.trim().toLowerCase()) && (
+                            <button
+                              type="button"
+                              disabled={isAddingTransporter}
+                              onClick={() => addAndSelectTransporter(transporterSearch)}
+                              className="w-full text-left px-3 py-2.5 bg-blue-50 hover:bg-blue-100 border-b-2 border-[#141414] transition-all flex items-center justify-between gap-2 disabled:opacity-50"
+                            >
+                              <div className="min-w-0">
+                                <span className="text-[8px] font-black uppercase tracking-[0.15em] text-blue-600 block">Add New Transporter</span>
+                                <span className="text-xs font-mono font-bold truncate block">{transporterSearch.trim()}</span>
+                              </div>
+                              <Plus size={13} className="shrink-0 text-blue-700" />
+                            </button>
+                          )}
+
                           <button
-                            key={t}
+                            type="button"
                             onClick={() => {
-                              setReport({...report, transporter: t});
+                              setReport({...report, transporter: ''});
                               setShowTransporterMenu(false);
+                              setShowAddTransporterForm(false);
+                              setTransporterSearch('');
+                              setTransporterFormError('');
                             }}
-                            className={`w-full text-left px-3 py-2 font-mono text-xs transition-all hover:bg-[#141414] hover:text-white
-                              ${report.transporter === t ? 'bg-[#141414] text-white' : ''}`}
+                            className="w-full text-left px-3 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600 border-b border-[#141414]/10 transition-all opacity-50 hover:opacity-100"
                           >
-                            {t}
+                            Clear Selection
                           </button>
-                        ))}
+
+                          {filteredTransporters.length > 0 ? (
+                            filteredTransporters.map(t => (
+                              <button
+                                key={t.name}
+                                type="button"
+                                onClick={() => {
+                                  setReport({...report, transporter: t.name});
+                                  setShowTransporterMenu(false);
+                                  setShowAddTransporterForm(false);
+                                  setTransporterSearch('');
+                                  setTransporterFormError('');
+                                }}
+                                className={`w-full text-left px-3 py-2 font-mono text-xs transition-all hover:bg-[#141414] hover:text-white flex items-center justify-between gap-2
+                                  ${report.transporter === t.name ? 'bg-[#141414] text-white' : ''}`}
+                              >
+                                <span className="truncate">{t.name}</span>
+                                {t.isCustom && (
+                                  <span className={`text-[7px] font-sans font-black uppercase px-1 py-0.5 border shrink-0 ${
+                                    report.transporter === t.name ? 'border-white/40 text-white/90' : 'border-[#141414]/20 text-[#141414]/60'
+                                  }`}>
+                                    Custom
+                                  </span>
+                                )}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-3 py-4 text-[10px] text-center opacity-40 font-bold uppercase tracking-widest">
+                              No transporters found
+                            </div>
+                          )}
+                        </div>
                       </motion.div>
                     </>
                   )}

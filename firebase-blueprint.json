@@ -94,6 +94,17 @@
         "addedBy": { "type": "string", "maxLength": 128 }
       },
       "required": ["oldSku", "newSku", "createdAt", "addedBy"]
+    },
+    "MasterTransporter": {
+      "title": "Master Transporter",
+      "description": "A custom transporter added by a user in the Transporter panel.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "addedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["name", "createdAt", "addedBy"]
     }
   },
   "firestore": {
@@ -112,6 +123,10 @@
     "/masterSkus/{skuId}": {
       "schema": "MasterSku",
       "description": "Custom SKU mappings added via the Inventory Picker panel."
+    },
+    "/masterTransporters/{transporterId}": {
+      "schema": "MasterTransporter",
+      "description": "Custom transporters added via the Transporter panel."
     }
   }
 }

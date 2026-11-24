@@ -77,5 +77,20 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(skuId) && isValidMasterSku(incoming());
       allow update, delete: if false;
     }
+
+    function isValidMasterTransporter(data) {
+      return data.keys().hasAll(['name', 'createdAt', 'addedBy']) &&
+             data.keys().hasOnly(['name', 'createdAt', 'addedBy']) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 128 &&
+             data.addedBy is string && data.addedBy.size() <= 128 && data.addedBy == request.auth.uid &&
+             data.createdAt == request.time;
+    }
+
+    match /masterTransporters/{transporterId} {
+      allow get: if isSignedIn() && isValidId(transporterId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(transporterId) && isValidMasterTransporter(incoming());
+      allow update, delete: if false;
+    }
   }
 }
